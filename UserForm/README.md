@@ -38,3 +38,18 @@ does the instantiation, so name resolution stays in the repo where the form actu
 |---|---|
 | `ChromeDriver Error/UserForm_WebDriverError.vb` | Shown when the Selenium WebDriver fails to start, usually a ChromeDriver version mismatch. Offers the SeleniumBasic directory and the driver download URL. |
 | `SheetPicker/UserForm_SheetPicker.vb` | Lets the user pick a sheet when an imported workbook has no sheet matching the expected name. |
+
+## Manual steps outstanding
+
+Both are one-time workbook edits; the code already expects them.
+
+1. **Rename Securitas's error form** from `WebDriverErrorForm` to
+   `SecuritasWebDriverErrorForm` in the VBA editor (Properties window → Name). The shim in
+   `SecuritasAutomation/ShowWebDriverError.vb` refers to the prefixed name.
+2. **Export JCI's `JCIWebDriverErrorForm`** into `JCI-invoice-tracker/UserForm/` so it is
+   under version control. It currently exists only inside the `.xlsm`. Its code should match
+   `ChromeDriver Error/UserForm_WebDriverError.vb` here.
+
+Optional: import the SheetPicker form into JCI's workbook and replace its `PickSheetName`
+stub with a real instantiation. Until then JCI falls back to a prompt listing the sheets,
+which works fine.
