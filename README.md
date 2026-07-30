@@ -37,6 +37,23 @@ compile. Shadowing is the only safe override mechanism.
 A shadow forks the module — it stops receiving core improvements. Prefer parameterizing
 through `TenantConfig.vb`. Keep shadows rare and document them in the variant.
 
+**Shadow paired modules together.** Some core modules share module-level state with a
+sibling (`PauseThinking.vb` holds the saved state `RestoreThinking.vb` restores).
+Shadowing only one half leaves the pair inconsistent — the override won't maintain the
+state its sibling still depends on. Shadow both, or neither.
+
+## Conventions for core modules
+
+- **No `Option Explicit` outside `Header.vb`.** Every module is concatenated into one
+  file, and VBA requires module-level options to precede all procedures. `Header.vb` is
+  pinned first and owns them; an `Option Explicit` anywhere else lands mid-file and
+  fails to compile.
+- **One module's filename must match what variants use**, since the shadow rule keys on
+  filename. Splitting a core module into differently-named files defeats a variant's
+  ability to override it.
+- **Don't depend on the active sheet.** Take a worksheet parameter, or resolve one
+  through `TenantSheetName()`.
+
 ## Design docs
 
 Architecture decisions and the domain glossary live in `SecuritasAutomation`:
