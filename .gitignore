@@ -1,0 +1,8 @@
+node_modules/
+dist/
+*.log
+logs/
+test-input/
+
+# Stacked artifacts are build output, not source.
+*MegaStack*.vb
