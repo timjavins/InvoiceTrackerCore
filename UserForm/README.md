@@ -21,16 +21,25 @@ The `.vb` files here are version control for the *code behind* each form. To put
 into a workbook, export it from a workbook that has it (`.frm` + `.frx`) and import it via
 the VBA editor. Keep the code here in step by hand when it changes.
 
-## Per-tenant naming
+## Per-tenant naming is required, not cosmetic
 
-Form class names are resolved at compile time — `New SomeForm` cannot take a name from a
-config string. So each variant owns its own copy of a form, named with its tenant prefix:
+**Every form must carry its tenant's prefix.** Both tracker workbooks are routinely open in
+the same Excel instance, and their VBA projects share the default project name
+(`VBAProject`), so two forms with the same class name across the two projects collide.
 
-- `SecuritasWebDriverErrorForm`
-- `JCIWebDriverErrorForm`
+- `SecuritasWebDriverErrorForm` / `JCIWebDriverErrorForm`
+- `SecuritasSheetPickerForm` / `JCISheetPickerForm`
 
-Core never names a form class. It calls a variant-owned shim (`ShowWebDriverError`) that
-does the instantiation, so name resolution stays in the repo where the form actually exists.
+Core never names a form class. It calls a variant-owned shim — `ShowWebDriverError`,
+`PickSheetName` — which does the instantiation, so name resolution stays in the repo whose
+workbook actually holds the form.
+
+### A shim cannot fall back when its form is missing
+
+`Dim frm As SomeForm` is resolved at **compile time**, so a workbook without the form fails
+to compile — an error handler cannot rescue it. A variant that does not have a form must not
+mention the class at all; its shim returns empty and lets core take the fallback path. JCI's
+`PickSheetName` is exactly that stub.
 
 ## Forms
 
@@ -41,15 +50,16 @@ does the instantiation, so name resolution stays in the repo where the form actu
 
 ## Manual steps outstanding
 
-Both are one-time workbook edits; the code already expects them.
+All are one-time workbook edits in the VBA editor (Properties window → Name). The code
+already expects the prefixed names.
 
-1. **Rename Securitas's error form** from `WebDriverErrorForm` to
-   `SecuritasWebDriverErrorForm` in the VBA editor (Properties window → Name). The shim in
-   `SecuritasAutomation/ShowWebDriverError.vb` refers to the prefixed name.
-2. **Export JCI's `JCIWebDriverErrorForm`** into `JCI-invoice-tracker/UserForm/` so it is
-   under version control. It currently exists only inside the `.xlsm`. Its code should match
+1. **Rename Securitas's error form** `WebDriverErrorForm` → `SecuritasWebDriverErrorForm`.
+2. **Rename Securitas's picker** `SheetPickerForm` → `SecuritasSheetPickerForm`.
+3. **Export JCI's `JCIWebDriverErrorForm`** into `JCI-invoice-tracker/UserForm/` so it is
+   under version control. It exists only inside the `.xlsm` today. Its code should match
    `ChromeDriver Error/UserForm_WebDriverError.vb` here.
 
-Optional: import the SheetPicker form into JCI's workbook and replace its `PickSheetName`
-stub with a real instantiation. Until then JCI falls back to a prompt listing the sheets,
-which works fine.
+Optional — give JCI a sheet picker: import `SheetPicker/UserForm_SheetPicker.vb` into JCI's
+workbook, name it `JCISheetPickerForm`, then replace the stub body in
+`JCI-invoice-tracker/PickSheetName.vb` with the instantiation Securitas uses. Until then core
+prompts with a list of the workbook's sheets, which works.
