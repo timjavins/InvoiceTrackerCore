@@ -122,3 +122,33 @@ used instead.
 Form class names and CLSIDs are unrelated concerns. Class names collide because they are
 *our* identifiers in two projects that share a default project name; a CLSID is Microsoft's
 identifier for their own class and cannot collide.
+
+## Keeping the two tenants' forms in step
+
+The forms are byte-equivalent apart from the tenant prefix, and should stay that way. A
+change to one is a change to both.
+
+Verified 2026-07-31: executable code (comments and blanks stripped, prefix normalised) is
+hash-identical across each pair — 38 lines for the error dialog, 52 for the picker.
+
+### Known quirk
+
+`InitializeSheets` carries a default argument of `"INVOICE DETAILS"`:
+
+```vba
+Public Sub InitializeSheets(ByVal wb As Workbook, Optional ByVal expectedSheetName As String = "INVOICE DETAILS")
+```
+
+That is Securitas's sheet name sitting in a form shared by both tenants. It is harmless
+because `PickSheetName` always passes the expected name explicitly, so the default never
+fires — but a future caller that omits the second argument would make JCI look for
+Securitas's sheet. Prefer passing it.
+
+## Git handling
+
+`.frx` is a **binary** layout blob. Both repos carry a `.gitattributes` marking it as such,
+because these repos are used on Windows with `autocrlf` enabled and line-ending conversion
+would corrupt it. `.frm`, `.vb` and `.ps1` are pinned to CRLF, which is what the VBA editor
+expects.
+
+Expect `.frx` changes to show as "Binary files differ" — that is correct, not a problem.
