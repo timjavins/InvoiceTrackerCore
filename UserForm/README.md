@@ -12,14 +12,23 @@ bound to controls that only exist on that form. Pasting it into the main module 
 produce handlers with no controls to bind to, plus a stray `Option Explicit` in the middle
 of the file.
 
-A UserForm is also not just text. Excel stores it as a `.frm` **plus** a binary `.frx`
-holding the visual layout, so it cannot be reconstructed from the `.vb` here alone.
+A UserForm is also not just text. Excel stores it as a `.frm` — which holds the control
+definitions **and** the code-behind — plus a binary `.frx` holding the visual layout.
 
-## Consequence: forms are imported by hand, once per workbook
+## Where the forms live
 
-The `.vb` files here are version control for the *code behind* each form. To put a form
-into a workbook, export it from a workbook that has it (`.frm` + `.frx`) and import it via
-the VBA editor. Keep the code here in step by hand when it changes.
+Each variant owns its own `.frm`/`.frx` pair under its own `UserForm/` folder, because form
+class names must carry the tenant prefix (see below). This folder holds no form sources: a
+`.frm` is already self-contained, so keeping a separate copy of the code-behind here would
+just be a second version to drift out of step.
+
+    SecuritasAutomation/UserForm/ChromeDriver Error/SecuritasWebDriverErrorForm.frm + .frx
+    SecuritasAutomation/UserForm/SheetPicker/SecuritasSheetPickerForm.frm + .frx
+    JCI-invoice-tracker/UserForm/ChromeDriver Error/JCIWebDriverErrorForm.frm + .frx
+    JCI-invoice-tracker/UserForm/SheetPicker/JCISheetPickerForm.frm + .frx
+
+To move a form between workbooks: export the `.frm` (the `.frx` follows automatically) from
+the VBA editor, import it into the target workbook, then rename it for that tenant.
 
 ## Per-tenant naming is required, not cosmetic
 
@@ -45,19 +54,15 @@ mention the class at all; its shim returns empty and lets core take the fallback
 
 | Form | Purpose |
 |---|---|
-| `ChromeDriver Error/UserForm_WebDriverError.vb` | Shown when the Selenium WebDriver fails to start, usually a ChromeDriver version mismatch. Offers the SeleniumBasic directory and the driver download URL. |
-| `SheetPicker/UserForm_SheetPicker.vb` | Lets the user pick a sheet when an imported workbook has no sheet matching the expected name. |
+| `<Tenant>WebDriverErrorForm` | Shown when the Selenium WebDriver fails to start, usually a ChromeDriver version mismatch. Offers the SeleniumBasic directory and the driver download URL. |
+| `<Tenant>SheetPickerForm` | Lets the user pick a sheet when an imported workbook has no sheet matching the expected name. |
 
-## Manual steps outstanding
+## Manual steps — done (2026-07-31)
 
-All are one-time workbook edits in the VBA editor (Properties window → Name). The code
-already expects the prefixed names.
+Both workbooks' forms were renamed with tenant prefixes and exported into their repos, so
+all four `.frm`/`.frx` pairs are now version-controlled. Nothing outstanding.
 
-1. **Rename Securitas's error form** `WebDriverErrorForm` → `SecuritasWebDriverErrorForm`.
-2. **Rename Securitas's picker** `SheetPickerForm` → `SecuritasSheetPickerForm`.
-3. **Export JCI's `JCIWebDriverErrorForm`** into `JCI-invoice-tracker/UserForm/` so it is
-   under version control. It exists only inside the `.xlsm` today. Its code should match
-   `ChromeDriver Error/UserForm_WebDriverError.vb` here.
+JCI's picker form exists in the repo but has not been wired up yet — see below.
 
 ### Optional: give JCI a sheet picker
 
@@ -65,11 +70,12 @@ Until this is done, core prompts with a list of the workbook's sheets, which wor
 
 Two parts, and only the second is text you can copy:
 
-**1. The form object — import it, do not retype it.** A UserForm is a `.frm` (code plus
-control definitions) *and* a binary `.frx` (the visual layout). The `.vb` in this folder is
-only the code-behind, so the form cannot be rebuilt from it. In Securitas's workbook, right
-click the picker form → Export File, then in JCI's workbook File → Import File. Rename the
-imported form `JCISheetPickerForm` (Properties → Name).
+**1. The form object — import it, do not retype it.** A UserForm is a `.frm` (control
+definitions plus code-behind) *and* a binary `.frx` (the visual layout), so it cannot be
+rebuilt by pasting code. Import
+`JCI-invoice-tracker/UserForm/SheetPicker/JCISheetPickerForm.frm` in the VBA editor
+(File → Import File); the `.frx` is picked up alongside it. Confirm the imported form is
+named `JCISheetPickerForm`.
 
 **2. The shim — replace the stub body** in `JCI-invoice-tracker/PickSheetName.vb` with this,
 which is Securitas's version with the class name changed:
@@ -101,7 +107,7 @@ compile time, so naming a form that is not there breaks the build outright.
 
 ## About the GUID in the error form
 
-`UserForm_WebDriverError.vb` contains:
+The error form's code contains:
 
 ```vba
 Set dataObj = CreateObject("New:{1C3B4210-F441-11CE-B9EA-00AA006B1A69}")
