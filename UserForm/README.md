@@ -59,7 +59,60 @@ already expects the prefixed names.
    under version control. It exists only inside the `.xlsm` today. Its code should match
    `ChromeDriver Error/UserForm_WebDriverError.vb` here.
 
-Optional — give TenantB a sheet picker: import `SheetPicker/UserForm_SheetPicker.vb` into TenantB's
-workbook, name it `TenantBSheetPickerForm`, then replace the stub body in
-`TenantB-tracker/PickSheetName.vb` with the instantiation TenantA uses. Until then core
-prompts with a list of the workbook's sheets, which works.
+### Optional: give TenantB a sheet picker
+
+Until this is done, core prompts with a list of the workbook's sheets, which works fine.
+
+Two parts, and only the second is text you can copy:
+
+**1. The form object — import it, do not retype it.** A UserForm is a `.frm` (code plus
+control definitions) *and* a binary `.frx` (the visual layout). The `.vb` in this folder is
+only the code-behind, so the form cannot be rebuilt from it. In TenantA's workbook, right
+click the picker form → Export File, then in TenantB's workbook File → Import File. Rename the
+imported form `TenantBSheetPickerForm` (Properties → Name).
+
+**2. The shim — replace the stub body** in `TenantB-tracker/PickSheetName.vb` with this,
+which is TenantA's version with the class name changed:
+
+```vba
+Public Function PickSheetName(ByVal wb As Workbook, ByVal expectedName As String) As String
+    On Error GoTo ShowFailed
+
+    Dim picker As TenantBSheetPickerForm
+    Set picker = New TenantBSheetPickerForm
+
+    picker.InitializeSheets wb, expectedName
+    picker.Show vbModal
+
+    PickSheetName = VBA.Trim$(picker.SelectedSheetName)
+
+    Unload picker
+    Set picker = Nothing
+    Exit Function
+
+ShowFailed:
+    ' Could not display the picker: return empty so core prompts instead.
+    PickSheetName = vbNullString
+End Function
+```
+
+Do not add these lines before the form exists in the workbook — the type is resolved at
+compile time, so naming a form that is not there breaks the build outright.
+
+## About the GUID in the error form
+
+`UserForm_WebDriverError.vb` contains:
+
+```vba
+Set dataObj = CreateObject("New:{1C3B4210-F441-11CE-B9EA-00AA006B1A69}")
+```
+
+That is Microsoft's registered CLSID for `MSForms.DataObject`, the clipboard helper — a fixed
+Windows constant, the same on every machine. It is not per-workbook, not generated, and
+nothing to keep unique: copy it verbatim. `MSForms.DataObject` cannot be created by name from
+a standard module without a reference to the MSForms library, which is why the class ID is
+used instead.
+
+Form class names and CLSIDs are unrelated concerns. Class names collide because they are
+*our* identifiers in two projects that share a default project name; a CLSID is Microsoft's
+identifier for their own class and cannot collide.
