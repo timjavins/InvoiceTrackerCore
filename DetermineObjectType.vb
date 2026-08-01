@@ -26,11 +26,11 @@ Public Function DetermineObjectType(ByVal headersDict As Object) As String
     present.CompareMode = 1   ' vbTextCompare
 
     Dim key As Variant
-    Dim name As String
+    Dim headerName As String
     For Each key In headersDict.Keys
-        name = VBA.Trim$(CStr(headersDict(key)))
-        If Len(name) > 0 Then
-            If Not present.Exists(name) Then present.Add name, True
+        headerName = VBA.Trim$(CStr(headersDict(key)))
+        If Len(headerName) > 0 Then
+            If Not present.Exists(headerName) Then present.Add headerName, True
         End If
     Next key
 
