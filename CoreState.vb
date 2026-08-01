@@ -1,9 +1,18 @@
 ' Module-level state shared by core routines.
 '
 ' Declared here rather than in a variant's Header.vb so that any variant consuming core
-' gets it automatically. VBA allows module-level declarations anywhere in a module, so
-' this file's position in the stack does not matter -- unlike Option Explicit, which must
-' precede all procedures and therefore belongs only in Header.vb.
+' gets it automatically.
+'
+' VBA requires EVERY module-level declaration to precede the first procedure -- not just
+' Option Explicit. Anything after one raises "Only comments may appear after End Sub, End
+' Function, or End Property". A module in the middle of the stack cannot satisfy that on its
+' own, so Stack-VBFiles.ps1 hoists declarations into a header block at the top of the
+' assembled file. Declaring state in a core module is therefore fine; the assembler places it
+' correctly.
+'
+' The stacked code is pasted into ThisWorkbook, which is a class module, so avoid the
+' declarations VBA forbids as public members of an object module: Public Const, public fixed
+' size arrays, fixed-length strings, and Declare. Private Const is fine.
 
 ' Set by a core routine when it could not complete an operation, so the caller can decide
 ' whether to continue. Callers are responsible for clearing it before a run.
