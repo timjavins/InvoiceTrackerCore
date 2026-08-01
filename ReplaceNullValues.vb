@@ -9,7 +9,7 @@
 ' comment misdescribed them: against the real exports those are PO Number on Coupa Reqs, and
 ' Payment Date / Payment Due Date (Oracle) / Payment Num's on Coupa Invs -- not the
 ' "Supplier Invoice #, Supplier Invoice Date, Payment #" the comment claimed. Only pinned
-' columns have fixed positions, so a letter is not a reliable way to name these.
+' columns have fixed positions, so a letter is not a reliable way to identify these.
 '
 ' Grafted from both variants: JCI's table-driven loop over sheet/column pairs, with
 ' Securitas's blank test, which also catches empty strings and not just IsEmpty.
@@ -51,15 +51,15 @@ Private Function CoerceBlanksOn(ByVal ws As Worksheet, ByVal headerNames As Vari
     If headers Is Nothing Then Exit Function
 
     Dim i As Long
-    Dim name As String
+    Dim headerName As String
     For i = LBound(headerNames) To UBound(headerNames)
-        name = CStr(headerNames(i))
+        headerName = CStr(headerNames(i))
 
-        If Not headers.Exists(name) Then
-            Debug.Print "ReplaceNullValues: '" & name & "' not found on " & ws.name & _
+        If Not headers.Exists(headerName) Then
+            Debug.Print "ReplaceNullValues: '" & headerName & "' not found on " & ws.name & _
                         " -- skipped."
         Else
-            CoerceBlanksOn = CoerceBlanksInColumn(ws, headers(name)) + CoerceBlanksOn
+            CoerceBlanksOn = CoerceBlanksInColumn(ws, headers(headerName)) + CoerceBlanksOn
         End If
     Next i
 End Function

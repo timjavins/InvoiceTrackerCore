@@ -66,19 +66,19 @@ End Function
 
 ' Turns a tooltip mention like "@jane.smithnordstrom.com" into "jane.smith@nordstrom.com".
 Private Function NormalizeMentionToEmail(ByVal mention As String, ByVal domain As String) As String
-    Dim local As String
-    local = mention
+    Dim localPart As String
+    localPart = mention
 
     ' Drop the leading @ the mention markup carries.
-    If Left$(local, 1) = "@" Then local = Mid$(local, 2)
+    If Left$(localPart, 1) = "@" Then localPart = Mid$(localPart, 2)
 
     Dim domainPos As Long
-    domainPos = InStr(1, local, domain, vbTextCompare)
+    domainPos = InStr(1, localPart, domain, vbTextCompare)
 
     If domainPos > 1 Then
-        NormalizeMentionToEmail = Left$(local, domainPos - 1) & "@" & Mid$(local, domainPos)
+        NormalizeMentionToEmail = Left$(localPart, domainPos - 1) & "@" & Mid$(localPart, domainPos)
     Else
-        NormalizeMentionToEmail = local
+        NormalizeMentionToEmail = localPart
     End If
 End Function
 
