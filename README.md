@@ -48,6 +48,15 @@ state its sibling still depends on. Shadow both, or neither.
   file, and VBA requires module-level options to precede all procedures. `Header.vb` is
   pinned first and owns them; an `Option Explicit` anywhere else lands mid-file and
   fails to compile.
+- **Module-level declarations are hoisted for you.** VBA requires *every* module-level
+  declaration before the first procedure, not just `Option Explicit` -- otherwise the build
+  fails with "Only comments may appear after End Sub, End Function, or End Property". A
+  module in the middle of the stack cannot satisfy that alone, so `Stack-VBFiles.ps1` lifts
+  declarations into a header block at the top of the assembled file and reports which
+  modules it moved. Declaring state in a core module is fine.
+- **The stack is pasted into `ThisWorkbook`, a class module.** Avoid what VBA forbids as
+  public members of an object module: `Public Const`, public fixed-size arrays,
+  fixed-length strings, and `Declare`. `Private Const` and procedure-local `Const` are fine.
 - **One module's filename must match what variants use**, since the shadow rule keys on
   filename. Splitting a core module into differently-named files defeats a variant's
   ability to override it.
