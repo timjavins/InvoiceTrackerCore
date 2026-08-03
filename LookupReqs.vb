@@ -15,7 +15,11 @@
 ' and appends everything else in export order, so "Supplier Part Number" has no guaranteed
 ' position.
 
-Public Sub LookupReqs(Optional ByVal announce As Boolean = True)
+' manageProtection defaults to True so the sub works from a caller that left the sheet
+' protected (UpdateCoupaData does). Callers that unprotect around a whole sequence -- both
+' Refresh paths -- pass False to avoid redundant toggling.
+Public Sub LookupReqs(Optional ByVal announce As Boolean = True, _
+                      Optional ByVal manageProtection As Boolean = True)
     Dim wsTracker As Worksheet
     Dim wsCoupaReqs As Worksheet
 
@@ -52,6 +56,11 @@ Public Sub LookupReqs(Optional ByVal announce As Boolean = True)
     lastRowReqs = wsCoupaReqs.Cells(wsCoupaReqs.Rows.Count, colReqNum).End(xlUp).Row
 
     If lastRow < 2 Or lastRowReqs < 2 Then Exit Sub
+
+    If manageProtection Then
+        wsTracker.Activate
+        UnprotectSheet
+    End If
 
     ' Read both sides into memory; write the tracker column back in one operation.
     Dim coupaReqNums As Variant, coupaPartNums As Variant
@@ -95,6 +104,8 @@ Public Sub LookupReqs(Optional ByVal announce As Boolean = True)
     Next i
 
     wsTracker.Range(colTrackerReq & "2:" & colTrackerReq & lastRow).Value = trackerReqNums
+
+    If manageProtection Then ProtectSheet
 
     If announce And foundCount > 0 Then
         MsgBox foundCount & " requisition number(s) found for invoices that had none listed.", _
