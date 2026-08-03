@@ -51,6 +51,11 @@ Sub GetBlockerEmails()
     ' Find the last row with data in column O
     lastRow = ws.Cells(ws.Rows.Count, TenantColLetter("submitted-invoice-number")).End(xlUp).Row
    
+    ' This sheet may arrive protected (AddNewBills protects on exit), and every write below
+    ' would fail with a runtime error. Unprotect for the duration and restore on every exit.
+    ws.Activate
+    UnprotectSheet
+
     ' Clear existing values in columns AF and AG before starting
     ws.Range(TenantColLetter("blocker-email") & "2:" & TenantColLetter("blocker-email") & lastRow).ClearContents
     ws.Range(TenantColLetter("blocker-name") & "2:" & TenantColLetter("blocker-name") & lastRow).ClearContents
@@ -70,7 +75,7 @@ Sub GetBlockerEmails()
     Next i
 
     If pendingCount = 0 Then
-        ' Nothing paused or unprotected yet, so there is nothing to undo here.
+        ProtectSheet
         MsgBox "No requisitions are pending approval, so there are no approvers to look up.", _
                vbInformation
         Exit Sub
@@ -179,13 +184,15 @@ NextIteration:
     ws.Range(TenantColLetter("blocker-email") & "2:" & TenantColLetter("blocker-email") & lastRow).Value = emailArr
     ws.Range(TenantColLetter("blocker-name") & "2:" & TenantColLetter("blocker-name") & lastRow).Value = nameArr
 
+    ProtectSheet
     driver.Quit
     Exit Sub
 
 DriverError:
+    ProtectSheet
     ' The form class lives in the variant, since VBA binds it at compile time.
     ShowWebDriverError Err.Description
-    
+
     Exit Sub
 
 UserLogin:
@@ -193,6 +200,7 @@ UserLogin:
     If userResponse = vbYes Then
         GoTo CheckURL
     Else
+        ProtectSheet
         MsgBox "Login not confirmed. Exiting script.", vbExclamation
         driver.Quit
         Exit Sub
