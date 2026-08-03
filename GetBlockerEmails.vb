@@ -54,27 +54,43 @@ Sub GetBlockerEmails()
     ' Clear existing values in columns AF and AG before starting
     ws.Range(TenantColLetter("blocker-email") & "2:" & TenantColLetter("blocker-email") & lastRow).ClearContents
     ws.Range(TenantColLetter("blocker-name") & "2:" & TenantColLetter("blocker-name") & lastRow).ClearContents
-    
-    ' Initialize WebDriver
-    Debug.Print "Initializing web driver"
-    Set driver = New WebDriver
-    Debug.Print "Starting web driver"
-    
-    On Error GoTo DriverError
-    driver.Start "chrome", ""
-    On Error GoTo 0
-    
-    Debug.Print "Maximizing window"
-    driver.Window.Maximize
-    
-    ' Navigate to the login page
-    Debug.Print "Navigating to Coupa."
-    driver.Get "https://" & TenantCoupaHost() & "/"
 
     Debug.Print "Beginning to parse data in " + ws.Name
     ' Read all relevant columns into arrays at once
     statusArr = ws.Range(TenantColLetter("requisition-status") & "2:" & TenantColLetter("requisition-status") & lastRow).Value ' Status column
     reqArr = ws.Range(TenantColLetter("requisition-number") & "2:" & TenantColLetter("requisition-number") & lastRow).Value    ' REQ # column
+
+    ' Count the work before launching a browser -- starting Chrome and waiting for an Okta
+    ' login only to find nothing to look up is wasted effort.
+    Dim pendingCount As Long
+    For i = 1 To UBound(statusArr, 1)
+        If statusArr(i, 1) = "Pending Approval" Then
+            If Len(Trim$(CStr(reqArr(i, 1) & ""))) > 0 Then pendingCount = pendingCount + 1
+        End If
+    Next i
+
+    If pendingCount = 0 Then
+        ' Nothing paused or unprotected yet, so there is nothing to undo here.
+        MsgBox "No requisitions are pending approval, so there are no approvers to look up.", _
+               vbInformation
+        Exit Sub
+    End If
+
+    ' Initialize WebDriver
+    Debug.Print "Initializing web driver"
+    Set driver = New WebDriver
+    Debug.Print "Starting web driver"
+
+    On Error GoTo DriverError
+    driver.Start "chrome", ""
+    On Error GoTo 0
+
+    Debug.Print "Maximizing window"
+    driver.Window.Maximize
+
+    ' Navigate to the login page
+    Debug.Print "Navigating to Coupa."
+    driver.Get "https://" & TenantCoupaHost() & "/"
 
     ' Initialize fresh empty arrays for results
     ReDim emailArr(1 To UBound(statusArr, 1), 1 To 1)
@@ -93,7 +109,7 @@ Sub GetBlockerEmails()
 CheckURL:
             timeout = Timer + 10
             Do While Timer < timeout
-                If InStr(driver.Url, "https://" & TenantCoupaHost() & "") = 1 Then
+                If IsCoupaSignedIn(driver) Then
                     loggedIn = True
                     Exit Do
                 End If
@@ -119,7 +135,7 @@ CheckStatus:
 
             response = driver.PageSource
             If InStr(response, "<h3 class=""requisitionTitle__status s-requisitionTitleStatus"">") = 0 Then
-                If InStr(driver.Url, "https://" & TenantCoupaHost() & "") <> 1 Then
+                If Not IsCoupaSignedIn(driver) Then
                     GoTo CheckURL
                 End If
                 Application.Wait Now + TimeValue("0:00:01")
@@ -182,3 +198,29 @@ UserLogin:
         Exit Sub
     End If
 End Sub
+
+' Whether the browser is actually on a signed-in Coupa page.
+'
+' Checking only that the URL starts with the Coupa host is not enough: Coupa's own login and
+' SSO hand-off pages live on that host too, so the old test reported "logged in" while the
+' user was still staring at a sign-in screen. Require the Coupa host AND the absence of the
+' identity provider and any login path.
+Private Function IsCoupaSignedIn(ByVal driver As WebDriver) As Boolean
+    Dim url As String
+
+    On Error Resume Next
+    url = LCase$(driver.Url)
+    On Error GoTo 0
+
+    If Len(url) = 0 Then Exit Function
+    If InStr(url, LCase$("https://" & TenantCoupaHost())) <> 1 Then Exit Function
+
+    ' Still authenticating.
+    If InStr(url, "okta.com") > 0 Then Exit Function
+    If InStr(url, "/sessions/new") > 0 Then Exit Function
+    If InStr(url, "/login") > 0 Then Exit Function
+    If InStr(url, "/user/session") > 0 Then Exit Function
+    If InStr(url, "saml") > 0 Then Exit Function
+
+    IsCoupaSignedIn = True
+End Function
