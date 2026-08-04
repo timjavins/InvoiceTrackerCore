@@ -366,7 +366,7 @@ Function ExtractPartNumber(driver As WebDriver) As String
         .Global = False
         .MultiLine = True
         .IgnoreCase = True
-        .pattern = "\b(\d{10})\b"
+        .pattern = "\b(\d{9,10})\b"
     End With
 
     Set matches = regex.Execute(response)
@@ -374,7 +374,7 @@ Function ExtractPartNumber(driver As WebDriver) As String
         partNumber = matches(0).SubMatches(0)
 
         ' Validate it's a 10-digit number
-        If Len(partNumber) = 10 And IsNumeric(partNumber) Then
+        If (Len(partNumber) = 9 Or Len(partNumber) = 10) And IsNumeric(partNumber) Then
             ExtractPartNumber = partNumber
             Exit Function
         End If
@@ -400,7 +400,7 @@ Function ExtractPartFromTitle(driver As WebDriver) As String
         Set regex = CreateObject("VBScript.RegExp")
         With regex
             .Global = False
-            .pattern = "REQ for (\d{10})"
+            .pattern = "REQ for (\d{9,10})"
         End With
 
         Set matches = regex.Execute(titleText)
