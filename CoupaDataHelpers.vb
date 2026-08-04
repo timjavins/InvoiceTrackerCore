@@ -189,11 +189,38 @@ Public Sub WriteCoupaColumnFromSourceData(ByVal sourceData As Variant, _
     Dim outputData() As Variant
     ReDim outputData(1 To sourceRowCount - 1, 1 To 1)
 
+    ' Identifier columns are written as text. These are the join keys the tracker's XLOOKUPs
+    ' search, and the tracker holds its side as text -- a numeric Req # or PO # here would not
+    ' match, and every dependent formula would return not-found.
+    Dim asText As Boolean
+    asText = IsIdentifierHeader(colName)
+
     Dim r As Long
     For r = 2 To sourceRowCount
-        outputData(r - 1, 1) = sourceData(r, headerIndex)
+        If asText Then
+            outputData(r - 1, 1) = CoerceIdentifier(sourceData(r, headerIndex))
+        Else
+            outputData(r - 1, 1) = sourceData(r, headerIndex)
+        End If
     Next r
 
-    wsTarget.Range(wsTarget.Cells(2, targetCol), _
-                   wsTarget.Cells(sourceRowCount, targetCol)).Value = outputData
+    Dim targetRange As Range
+    Set targetRange = wsTarget.Range(wsTarget.Cells(2, targetCol), _
+                                     wsTarget.Cells(sourceRowCount, targetCol))
+
+    If asText Then targetRange.NumberFormat = "@"
+    targetRange.Value = outputData
 End Sub
+
+' Whether a Coupa export column holds an identifier that the tracker joins on, and so must be
+' stored as text to match the tracker's side.
+'
+' Amounts, dates and statuses are deliberately excluded -- those want to stay numeric or
+' date-typed so they sum and sort correctly.
+Private Function IsIdentifierHeader(ByVal colName As String) As Boolean
+    Select Case UCase$(Trim$(colName))
+        Case "REQ #", "REQ", "PO NUMBER", "INVOICE #", "SUPPLIER PART NUMBER", _
+             "INVOICE ID", "PAYMENT NUM'S", "COPIED FROM"
+            IsIdentifierHeader = True
+    End Select
+End Function

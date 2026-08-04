@@ -110,7 +110,11 @@ Public Sub MigrateColumnTypes()
     If skipped > 0 Then
         done = done & vbCrLf & skipped & " cell(s) skipped -- see the Immediate window."
     End If
-    done = done & vbCrLf & vbCrLf & "Nothing has been saved yet."
+    done = done & vbCrLf & vbCrLf & _
+           "NEXT: re-import the Coupa exports. The tracker's identifiers are now text, and a " & _
+           "lookup only matches when both sides are the same type -- ingestion writes them as " & _
+           "text, so a fresh import brings the Coupa sheets into line." & vbCrLf & vbCrLf & _
+           "Nothing has been saved yet."
     MsgBox done, vbInformation, "Migration complete"
     Exit Sub
 
