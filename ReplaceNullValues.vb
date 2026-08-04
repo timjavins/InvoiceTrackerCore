@@ -46,9 +46,15 @@ End Sub
 ' Replaces blanks with a space in the named columns of one sheet. Returns how many cells
 ' changed. Columns that are not present are skipped, since a saved Coupa view may omit them.
 Private Function CoerceBlanksOn(ByVal ws As Worksheet, ByVal headerNames As Variant) As Long
+    ' These sheets can be protected, and writing a protected cell fails.
+    UnprotectSheetOn ws
+
     Dim headers As Object
     Set headers = GetHeaderColumnIndexes(ws, 1, headerNames)
-    If headers Is Nothing Then Exit Function
+    If headers Is Nothing Then
+        ProtectSheetOn ws   ' unprotected above; do not leave it open
+        Exit Function
+    End If
 
     Dim i As Long
     Dim headerName As String
@@ -62,6 +68,8 @@ Private Function CoerceBlanksOn(ByVal ws As Worksheet, ByVal headerNames As Vari
             CoerceBlanksOn = CoerceBlanksInColumn(ws, headers(headerName)) + CoerceBlanksOn
         End If
     Next i
+
+    ProtectSheetOn ws
 End Function
 
 ' Reads one column, replaces blanks in memory, writes it back in a single operation.

@@ -66,6 +66,9 @@ Public Sub ProcessCoupaExport(ByVal objectType As String, _
 
     PauseThinking
 
+    ' The Coupa sheets can be protected too, and clearing or writing a protected sheet fails.
+    UnprotectSheetOn wsTarget
+
     wsTarget.Cells.Clear
 
     Dim processed As Object
@@ -95,6 +98,8 @@ Public Sub ProcessCoupaExport(ByVal objectType As String, _
         End If
     Next key
 
+    ProtectSheetOn wsTarget
+
     StampImportTime objectType
 
     RestoreThinking
@@ -114,7 +119,9 @@ Private Sub StampImportTime(ByVal objectType As String)
     If wsHelper Is Nothing Then Exit Sub
 
     On Error Resume Next
+    UnprotectSheetOn wsHelper
     wsHelper.Range(cellAddr).Value = Now
+    ProtectSheetOn wsHelper
     On Error GoTo 0
 End Sub
 
