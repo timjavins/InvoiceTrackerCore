@@ -146,9 +146,12 @@ End Sub
 
 ' Whether a row represents repair work, and so is a warranty candidate.
 '
-' Securitas gates on a Service Order number in transaction details or "REPAIR" in the
-' invoice type. A tenant without those columns has no way to distinguish repair rows, so
-' every row is a candidate -- which is what JCI did.
+' Monitoring is excluded outright: it is a recurring service subscription, so a new-store
+' warranty cannot apply. Otherwise a row qualifies on "REPAIR" in the invoice type or a
+' Service Order number in transaction details.
+'
+' A tenant without either column has no way to distinguish repair rows, so every row is a
+' candidate -- which is what JCI did, and still does.
 Private Function IsRepairRow(ByVal ws As Worksheet, ByVal rowIndex As Long) As Boolean
     Dim colDetails As String, colType As String
 
@@ -163,7 +166,16 @@ Private Function IsRepairRow(ByVal ws As Worksheet, ByVal rowIndex As Long) As B
     End If
 
     If Len(colType) > 0 Then
-        If InStr(1, CStr(ws.Cells(rowIndex, colType).Value), "REPAIR", vbTextCompare) > 0 Then
+        Dim invoiceType As String
+        invoiceType = CStr(ws.Cells(rowIndex, colType).Value)
+
+        ' Monitoring is a recurring service subscription, not repair work, so a new-store
+        ' warranty never applies to it. This has to be checked before anything else: a
+        ' monitoring bill can still carry a Service Order number in transaction details, and
+        ' the SO# test below would otherwise let it through.
+        If InStr(1, invoiceType, "MONITORING", vbTextCompare) > 0 Then Exit Function
+
+        If InStr(1, invoiceType, "REPAIR", vbTextCompare) > 0 Then
             IsRepairRow = True
             Exit Function
         End If
