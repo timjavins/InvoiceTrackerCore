@@ -63,6 +63,64 @@ state its sibling still depends on. Shadow both, or neither.
 - **Don't depend on the active sheet.** Take a worksheet parameter, or resolve one
   through `TenantSheetName()`.
 
+## The Coupa Users roster
+
+`CoupaUsers.vb` verifies every requester email against the active-Coupa-user report before it
+reaches a flat file, because Coupa rejects an upload row whose requester is not a live user.
+
+The roster is a **shared resource**, so it reaches each workbook the same way `BU List` does —
+a Power Query against a SharePoint list on the Asset Protection PMO site, landing on a sheet
+named by `TenantSheetName("coupa-users")` (currently `Coupa Users` in both variants).
+
+Wiring up a variant workbook:
+
+1. Publish the active-users report as a list on the Asset Protection PMO SharePoint site, so
+   both trackers read one copy.
+2. In the workbook: **Data → Get Data → From Online Services → From SharePoint Online List**,
+   point it at `https://nordstrom.sharepoint.com/sites/AssetProtectionPMO`, pick the list, and
+   load it to a new sheet named to match `TenantSheetName("coupa-users")`. `BU List`'s existing
+   query is the template — same site, same `SharePoint.Tables` source, `ApiVersion = 15`.
+3. Nothing else. Core finds the columns itself.
+
+Core resolves columns **by header name**, not position, because a refresh reorders and renames
+freely. It accepts several spellings for each of the two columns that matter — see
+`EmailHeaderNames` and `StatusHeaderNames` in `CoupaUsers.vb`. A roster with no recognizable
+status column is treated as already filtered to active users, which is what an "active users
+report" normally is.
+
+If the sheet is absent, empty, or unreadable, verification is **unavailable** and every address
+passes, with the reason reported once in the run's summary. A workbook not yet wired up must
+still be able to export. See ADR-0005.
+
+## The Site RPs sheet
+
+`RequesterEmail.vb` resolves a requisition's requester from the sheet named by
+`TenantSheetName("site-rps")`, walking `Email` → `Tier 1 email` → `Tier 2 email` →
+`Tier 3 email` and taking the first that is an active Coupa user.
+
+That sheet is built by `docs/power-query/site-rps.m` — paste it into each tracker's Power
+Query Advanced Editor and name the query `Site RPs`. It joins two shared sources:
+
+- **`BU List`** (the SharePoint list, already queried in both trackers) — the store list,
+  store name, and BU
+- **`Store AP Staff Directory.xlsx` / `AP POCs`** on the same SharePoint site — tier 1/2/3
+  contacts
+
+`Vertical` is derived as BU `200` → `NS`, BU `250` → `NR`, else blank. Tier 1 is suppressed
+for `NS` stores: for a full-line store the directory's tier 1 is the store-level AP person,
+who is not the right requisition requester — tier 2 is. **That suppression is load-bearing.**
+Remove it and every NS store starts raising requisitions for a different person.
+
+### Why it is a query
+
+It used to be a hand-typed store list plus XLOOKUP formulas into the directory. The links
+drifted: JCI's resolved to the SharePoint copy while Securitas's was hardcoded to
+`C:\Users\p4bn\Downloads\`, so the two trackers disagreed about the responsible party for
+**100 stores** — invisibly, since nothing compared them. Shared facts fed by per-workbook
+formulas will drift; shared facts fed by a query against a shared source cannot.
+
+Adding a store now needs no worksheet editing in either tracker.
+
 ## Design docs
 
 Architecture decisions and the domain glossary live in `SecuritasAutomation`:
@@ -72,3 +130,4 @@ Architecture decisions and the domain glossary live in `SecuritasAutomation`:
 - `docs/adr/0002` — why core is an independent sibling folder
 - `docs/adr/0003` — TenantConfig as the single narrow interface
 - `docs/adr/0004` — the shadow rule
+- `docs/adr/0005` — the requester is the site's responsible party
