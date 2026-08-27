@@ -343,75 +343,30 @@ Function GetDraftRequisitionsByDate(driver As WebDriver, targetDate As String, r
     Set GetDraftRequisitionsByDate = draftReqs
 End Function
 
-' Extract part number from requisition edit page
-' Tries multiple sources: title, description, supplier part number
+' Extract the Supplier Part Number from the requisition edit page.
+'
+' Reads the line item's rendered value directly rather than guessing from the page
+' title or scanning raw HTML for a plausible-looking number. A prior version did the
+' latter and it silently grabbed the Ship-To ZIP+4 instead -- the title never actually
+' matches "REQ for <number>" on this Coupa instance, and the ZIP+4 is the first 9-10
+' digit run in the page source, ahead of the real field. That did not just cause
+' missed attachments: it could have attached the wrong PDF to a requisition if a file
+' happened to exist under the wrong scraped number.
+'
+' Coupa renders each line's part number into a <dd id="requisition_line_<id>_source_part_num">
+' regardless of whether the line is expanded, so no click is needed first.
 Function ExtractPartNumber(driver As WebDriver) As String
-    Dim response As String
-    Dim partNumber As String
-    Dim regex As Object
-    Dim matches As Object
-
-    ' Pattern 1: Requisition title "REQ for 6200003393"
-    partNumber = ExtractPartFromTitle(driver)
-    If partNumber <> "" Then
-        ExtractPartNumber = partNumber
-        Exit Function
-    End If
-
-    ' Pattern 2: Look for 10-digit numbers in page source
-    response = driver.PageSource
-    Set regex = CreateObject("VBScript.RegExp")
-
-    With regex
-        .Global = False
-        .MultiLine = True
-        .IgnoreCase = True
-        .pattern = "\b(\d{9,10})\b"
-    End With
-
-    Set matches = regex.Execute(response)
-    If matches.Count > 0 Then
-        partNumber = matches(0).SubMatches(0)
-
-        ' Validate it's a 10-digit number
-        If (Len(partNumber) = 9 Or Len(partNumber) = 10) And IsNumeric(partNumber) Then
-            ExtractPartNumber = partNumber
-            Exit Function
-        End If
-    End If
-
-    ExtractPartNumber = ""
-End Function
-
-' Extract part number from requisition title (h1 tag)
-Function ExtractPartFromTitle(driver As WebDriver) As String
-    Dim titleElem As WebElement
-    Dim titleText As String
-    Dim regex As Object
-    Dim matches As Object
+    Dim partNumElem As WebElement
 
     On Error Resume Next
-    Set titleElem = driver.FindElementByTag("h1")
-
-    If Not titleElem Is Nothing Then
-        titleText = titleElem.Text
-
-        ' Pattern: "REQ for 6200003393"
-        Set regex = CreateObject("VBScript.RegExp")
-        With regex
-            .Global = False
-            .pattern = "REQ for (\d{9,10})"
-        End With
-
-        Set matches = regex.Execute(titleText)
-        If matches.Count > 0 Then
-            ExtractPartFromTitle = matches(0).SubMatches(0)
-            Exit Function
-        End If
-    End If
-
+    Set partNumElem = driver.FindElementByCss("[id$='_source_part_num']")
     On Error GoTo 0
-    ExtractPartFromTitle = ""
+
+    If Not partNumElem Is Nothing Then
+        ExtractPartNumber = VBA.Trim$(partNumElem.Text)
+    Else
+        ExtractPartNumber = ""
+    End If
 End Function
 
 ' Attach PDF file and submit requisition
