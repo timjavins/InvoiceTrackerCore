@@ -349,3 +349,8 @@ if ($shadowed.Count -gt 0) {
 Write-Host ""
 Write-Host "Code in any UserForm folder is intentionally excluded."
 Write-Host ""
+
+# Holds the window open when the script is double-clicked from Explorer, so the summary above is
+# readable. An automated caller should redirect stdin (powershell -File ... < NUL) or it will block
+# here waiting for Enter.
+Read-Host
