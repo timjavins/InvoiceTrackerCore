@@ -147,6 +147,67 @@ Each module name must be unique across the variant and core combined.
 "@
 }
 
+# --- Warn: a local variable that shadows a procedure ------------------------------
+
+# VBA identifiers are case-insensitive, so `Dim tierLabels` and `Private Function TierLabels()`
+# are the SAME name. The Dim wins for the whole procedure it appears in, and calling the
+# function from there compiles cleanly -- `tierLabels()` is a valid array access -- then fails
+# at run time with "Subscript out of range".
+#
+# This exact bug shipped into a live workbook and cost a full debugging session, because the
+# symptom (error 9 from a flat-file generator) points nowhere near the cause. Only the
+# assembler sees every module at once, so only the assembler can catch the next one.
+#
+# A warning rather than an error: shadowing is not always a mistake, and a hard failure here
+# could block a build over a local that never calls its namesake.
+
+$procRegex = '^\s*(?:Public\s+|Private\s+|Friend\s+)?(?:Sub|Function|Property\s+(?:Get|Let|Set))\s+(\w+)'
+$endRegex = '^\s*End\s+(?:Sub|Function|Property)\b'
+$dimRegex = '^\s*(?:Dim|Static)\s+([\w\s,]+?)(?:\s+As\s|\s*$)'
+
+$procNames = @{}
+foreach ($file in $orderedFiles) {
+    foreach ($line in (Get-Content -LiteralPath $file.FullName)) {
+        if ($line -match $procRegex) { $procNames[$matches[1].ToLower()] = $matches[1] }
+    }
+}
+
+$shadows = @()
+foreach ($file in $orderedFiles) {
+    $currentProc = ''
+    $inProcedure = $false
+    $lineNo = 0
+    foreach ($line in (Get-Content -LiteralPath $file.FullName)) {
+        $lineNo++
+        if (-not $inProcedure -and $line -match $procRegex) {
+            $currentProc = $matches[1]
+            $inProcedure = $true
+            continue
+        }
+        if ($inProcedure -and $line -match $endRegex) {
+            $inProcedure = $false
+            $currentProc = ''
+            continue
+        }
+        if ($inProcedure -and $line -match $dimRegex) {
+            foreach ($declared in ($matches[1] -split ',')) {
+                $name = ($declared.Trim() -split '\s+')[0]
+                if (-not $name) { continue }
+                $key = $name.ToLower()
+                if ($procNames.ContainsKey($key) -and $key -ne $currentProc.ToLower()) {
+                    $shadows += [pscustomobject]@{
+                        File     = $file.Name
+                        Line     = $lineNo
+                        Proc     = $currentProc
+                        Local    = $name
+                        Shadowed = $procNames[$key]
+                    }
+                }
+            }
+        }
+    }
+}
+
 # --- Split each module into declarations and procedures ---------------------------
 
 # VBA requires every module-level declaration to appear before the first procedure:
@@ -252,6 +313,18 @@ if ($hoistedFrom.Count -gt 0) {
         Write-Host "    $name"
     }
     Write-Host "  VBA requires these before the first procedure, so they move to the top."
+}
+
+if ($shadows.Count -gt 0) {
+    Write-Host ""
+    Write-Host ("  WARNING -- {0} local variable(s) shadow a procedure of the same name:" -f $shadows.Count)
+    foreach ($s in $shadows) {
+        Write-Host ("    {0}:{1}  in {2}()  local '{3}' shadows '{4}'" -f `
+            $s.File, $s.Line, $s.Proc, $s.Local, $s.Shadowed)
+    }
+    Write-Host "  VBA names are case-insensitive, so the Dim wins for that whole procedure."
+    Write-Host "  Calling the procedure from there compiles, then fails at run time with"
+    Write-Host "  'Subscript out of range'. Rename one of them."
 }
 
 if ($shadowed.Count -gt 0) {
