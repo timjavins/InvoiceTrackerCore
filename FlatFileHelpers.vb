@@ -67,3 +67,8 @@ End Function
 ' (BU 302) handling, multi-store cost allocation and monitoring rules; JCI's is ~230 lines
 ' in a single procedure with none of those. Merging them would be a rewrite of JCI's output
 ' format, not an extraction, and the output feeds a real Coupa upload.
+'
+' What does come out from under them is whole decisions both generators have to make the same
+' way. Requester resolution was the fourth, after the three predicates above -- it now lives in
+' RequesterEmail.vb and CoupaUsers.vb. See ADR-0005. That is the pattern to follow: extract a
+' decision, not the generator around it.
