@@ -55,6 +55,12 @@ End Function
 Private Function AskForSheetName(ByVal wb As Workbook, ByVal expected As String) As String
     Dim chosen As String
 
+    ' Both branches show something modal, and AddNewBills calls this after PauseThinking. A modal
+    ' UserForm shown while ScreenUpdating is off paints as a blank grey rectangle, so the pause has
+    ' to come off for the duration.
+    Dim wasPaused As Boolean
+    wasPaused = SuspendThinkingForDialog()
+
     On Error Resume Next
     chosen = PickSheetName(wb, expected)
     On Error GoTo 0
@@ -64,6 +70,8 @@ Private Function AskForSheetName(ByVal wb As Workbook, ByVal expected As String)
     Else
         AskForSheetName = PromptForSheetName(wb, expected)
     End If
+
+    ResumeThinkingAfterDialog wasPaused
 End Function
 
 ' Plain-prompt fallback: lists the sheets and asks for one by name.
