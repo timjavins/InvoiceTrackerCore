@@ -167,7 +167,7 @@ $dimRegex = '^\s*(?:Dim|Static)\s+([\w\s,]+?)(?:\s+As\s|\s*$)'
 
 $procNames = @{}
 foreach ($file in $orderedFiles) {
-    foreach ($line in (Get-Content -LiteralPath $file.FullName)) {
+    foreach ($line in (Get-Content -LiteralPath $file.FullName -Encoding UTF8)) {
         if ($line -match $procRegex) { $procNames[$matches[1].ToLower()] = $matches[1] }
     }
 }
@@ -177,7 +177,7 @@ foreach ($file in $orderedFiles) {
     $currentProc = ''
     $inProcedure = $false
     $lineNo = 0
-    foreach ($line in (Get-Content -LiteralPath $file.FullName)) {
+    foreach ($line in (Get-Content -LiteralPath $file.FullName -Encoding UTF8)) {
         $lineNo++
         if (-not $inProcedure -and $line -match $procRegex) {
             $currentProc = $matches[1]
@@ -273,7 +273,7 @@ $procBlocks = New-Object System.Collections.Generic.List[string]
 $hoistedFrom = New-Object System.Collections.Generic.List[string]
 
 foreach ($file in $orderedFiles) {
-    $raw = Get-Content -Path $file.FullName -Raw
+    $raw = Get-Content -LiteralPath $file.FullName -Raw -Encoding UTF8
     $part = Split-VbModule -Text $raw
 
     if ($part.Declarations) {
@@ -290,7 +290,16 @@ foreach ($file in $orderedFiles) {
 # --- Write ------------------------------------------------------------------------
 
 $merged = (@($declBlocks) + @($procBlocks)) -join "`r`n`r`n"
-[System.IO.File]::WriteAllText($outputPath, $merged, [System.Text.Encoding]::UTF8)
+
+# Encoding matters in both directions, and getting either wrong corrupts comments silently.
+#
+# Read: every Get-Content above passes -Encoding UTF8. Windows PowerShell 5.1 otherwise decodes a
+# BOM-less file as the system code page, so a UTF-8 em-dash arrived as three cp1252 characters and
+# was re-encoded on write -- once per stack, compounding. Sources are UTF-8 without BOM.
+#
+# Write: UTF8Encoding($false), not [Text.Encoding]::UTF8, which emits a BOM. The VBE shows a BOM as
+# a stray character on the first line of the pasted module.
+[System.IO.File]::WriteAllText($outputPath, $merged, (New-Object System.Text.UTF8Encoding($false)))
 
 # --- Report -----------------------------------------------------------------------
 
