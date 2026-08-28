@@ -121,6 +121,48 @@ formulas will drift; shared facts fed by a query against a shared source cannot.
 
 Adding a store now needs no worksheet editing in either tracker.
 
+## The requester warnings report
+
+`RequesterWarnings.vb` collects the data-quality problems a run meets while working out who each
+requisition belongs to, and writes them to:
+
+```
+%USERPROFILE%\Downloads\Coupa requester warnings YYYYMMDD.xlsx
+```
+
+Same folder and same date shape as `Coupa uploads YYYYMMDD.csv`, so both artifacts of one export sit
+together. One sheet, eight columns:
+
+```
+Tracker Row | Store | Bill Ref | Issue | Requester Used | Tier | Inactive Skipped | Detail
+```
+
+with a frozen header row and AutoFilter across the used range. `Issue` is a closed set so it is
+worth filtering on:
+
+| Issue | Meaning |
+| --- | --- |
+| `NoSiteRPsRow` | the store is not on `Site RPs`, so the bill was skipped |
+| `NoContactAtAnyTier` | listed, but no email in any of the four columns |
+| `AllTiersInactive` | addresses exist, but none is an active Coupa user |
+| `EscalatedPastInactive` | exported fine, but not under the site's own responsible party |
+| `StoreNotInBUList` | the store has no GL code, so the bill was skipped |
+
+**A clean run writes no file at all**, and `WriteRequesterWarningsReport` returns `""`. That is
+deliberate: an empty report, or a file left from last week, would be read as this run's verdict.
+No file means nothing to fix.
+
+These warnings used to be concatenated into the generators' "Error Summary" `MsgBox`. That dialog
+now carries a single line naming the count and the path. Tenant-specific warnings — Securitas's
+blank bill codes, `INVOICE TYPE` problems, and the capitalize-or-expense and project-detail answers
+— stay in the dialog, because they are decisions the operator was just asked about rather than rows
+missing from a shared list.
+
+`RecordRequesterOutcome` decides whether an outcome is a warning at all and what to label it, so
+both tenants classify identically. It classifies from `TryResolveSiteRequester`'s `outcome` code,
+never from its `reason` prose — otherwise rewording a warning would silently change the
+classification.
+
 ## Design docs
 
 Architecture decisions and the domain glossary live in `SecuritasAutomation`:
