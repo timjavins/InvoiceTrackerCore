@@ -40,15 +40,39 @@
 ' resolvedTier names which of the four answered, and reason carries text for the run's error
 ' summary. reason is set on failure, AND on success when the answer did not come from the site's own
 ' responsible party -- an escalation is worth seeing even though it exported fine.
+'
+' outcome is the same story as a stable machine code, one of:
+'
+'     store-missing        the store could not be looked up (also returns False)
+'     no-contacts          listed, but no email in any of the four columns
+'     all-inactive         addresses exist, none of them an active Coupa user
+'     resolved-primary     the site's own responsible party answered -- the clean case
+'     resolved-escalated   resolved, but only after skipping past an inactive contact
+'
+' It exists because reason is PROSE. RequesterWarnings.vb has to classify every outcome to build the
+' report, and classifying by pattern-matching those sentences would make their wording load-bearing:
+' reword a warning for clarity and the classification changes silently, with no compiler and no test
+' to catch it. Callers get both -- the code to decide with, the sentence to show.
+'
+' inactiveSkipped is the comma-separated list of addresses the cascade passed over, so the report can
+' name them without re-walking the sheet to work out which they were.
 Public Function TryResolveSiteRequester(ByVal wsSiteRPs As Worksheet, _
                                         ByVal storeKey As String, _
                                         ByVal altStoreKey As String, _
                                         ByRef requesterEmail As String, _
                                         ByRef resolvedTier As String, _
-                                        ByRef reason As String) As Boolean
+                                        ByRef reason As String, _
+                                        ByRef outcome As String, _
+                                        ByRef inactiveSkipped As String) As Boolean
     requesterEmail = vbNullString
     resolvedTier = vbNullString
     reason = vbNullString
+    inactiveSkipped = vbNullString
+
+    ' The three ways a lookup fails outright all share one code. They are different sentences but the
+    ' same fact to a caller -- this store cannot be resolved, skip the bill and report it -- and the
+    ' Issue set is deliberately closed, so they classify together and reason tells them apart.
+    outcome = "store-missing"
 
     If wsSiteRPs Is Nothing Then
         reason = "No site responsible-party sheet was supplied."
@@ -98,12 +122,16 @@ Public Function TryResolveSiteRequester(ByVal wsSiteRPs As Worksheet, _
                 If IsActiveCoupaUser(candidate) Then
                     requesterEmail = candidate
                     resolvedTier = CStr(tierLabels(i))
+                    inactiveSkipped = skipped
                     If Len(skipped) > 0 Then
+                        outcome = "resolved-escalated"
                         ' Phrased without a verb agreeing on number, because the skipped list
                         ' can hold one address or several and this text goes straight into the
                         ' run's error summary.
                         reason = "Store " & storeKey & ": escalated to " & resolvedTier & " (" & _
                                  candidate & ") -- not active in Coupa: " & skipped & "."
+                    Else
+                        outcome = "resolved-primary"
                     End If
                     Exit Function
                 End If
@@ -112,9 +140,13 @@ Public Function TryResolveSiteRequester(ByVal wsSiteRPs As Worksheet, _
         End If
     Next i
 
+    inactiveSkipped = skipped
+
     If Len(skipped) = 0 Then
+        outcome = "no-contacts"
         reason = "Store " & storeKey & " has no requester email on '" & wsSiteRPs.Name & "'."
     Else
+        outcome = "all-inactive"
         reason = "Store " & storeKey & " has no active Coupa user among its contacts (" & _
                  skipped & ")."
     End If
