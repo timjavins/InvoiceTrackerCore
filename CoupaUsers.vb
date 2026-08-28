@@ -31,6 +31,14 @@
 ' The alternative -- treating unavailable as inactive -- would fall every single store back to the
 ' prompted default requester and quietly undo the responsible-party lookup, which is the exact
 ' failure this module exists to prevent. Fail open, and say so.
+'
+' STALE IS NOT UNAVAILABLE
+'
+' A roster whose publishing pipeline stopped still reads perfectly -- it just describes who was
+' active last week. Nothing about the sheet says so, so the pipeline stamps every row with the day
+' it ran and CoupaUsersStalenessWarning reports a roster older than CoupaUsersStalenessDays. A stale
+' roster is still used, because last week's list beats no list at all; the run just says how old it
+' is. And an undated roster is UNKNOWN rather than stale, so a hand-pasted one does not cry wolf.
 
 ' Lazily built map of normalized email -> True. Nothing means "not available", which is why the
 ' loaded flag is tracked separately: an unavailable roster must not be rebuilt on every lookup.
@@ -38,12 +46,19 @@ Private activeCoupaUsers As Object
 Private coupaUsersLoaded As Boolean
 Private coupaUsersReason As String
 
+' Captured from the roster's GeneratedOn column, so a pipeline that silently stopped is
+' visible instead of serving last-good data forever.
+Private coupaUsersGeneratedOn As Date
+Private coupaUsersGeneratedOnKnown As Boolean
+
 ' Forces the roster to be re-read. Call at the start of a run so refreshing the SharePoint query
 ' mid-session takes effect without reopening the workbook.
 Public Sub ResetCoupaUsersCache()
     Set activeCoupaUsers = Nothing
     coupaUsersLoaded = False
     coupaUsersReason = vbNullString
+    coupaUsersGeneratedOn = 0
+    coupaUsersGeneratedOnKnown = False
 End Sub
 
 ' Whether the roster could be read at all. False means IsActiveCoupaUser passes everything.
@@ -63,6 +78,26 @@ End Function
 Public Function CoupaUsersCount() As Long
     EnsureCoupaUsersLoaded
     If Not activeCoupaUsers Is Nothing Then CoupaUsersCount = activeCoupaUsers.Count
+End Function
+
+' A warning when the roster looks stale, or "" when it is fresh, undated, or unavailable.
+'
+' An absent or unparseable stamp is treated as UNKNOWN rather than stale, consistent with
+' this module's fail-open posture: a roster hand-pasted without the column should not
+' generate a warning on every run.
+Public Function CoupaUsersStalenessWarning() As String
+    EnsureCoupaUsersLoaded
+    If activeCoupaUsers Is Nothing Then Exit Function
+    If Not coupaUsersGeneratedOnKnown Then Exit Function
+
+    Dim ageDays As Long
+    ageDays = DateDiff("d", coupaUsersGeneratedOn, Date)
+    If ageDays <= CoupaUsersStalenessDays() Then Exit Function
+
+    CoupaUsersStalenessWarning = _
+        "The Coupa users roster was generated " & Format$(coupaUsersGeneratedOn, "yyyy-mm-dd") & _
+        ", " & ageDays & " days ago. Requester checks may be using stale data -- refresh " & _
+        "the '" & TenantSheetName("coupa-users") & "' query, and check the roster pipeline ran."
 End Function
 
 ' Whether an address belongs to an active Coupa user.
@@ -134,6 +169,14 @@ Private Sub EnsureCoupaUsersLoaded()
     ' Absent is fine: a report that already lists only active users has nothing to filter on.
     Dim statusCol As Long
     statusCol = FindRosterColumn(ws, headerRow, StatusHeaderNames())
+
+    ' Same value on every row, so the first data row is enough.
+    Dim generatedCol As Long
+    generatedCol = FindRosterColumn(ws, headerRow, GeneratedOnHeaderNames())
+    If generatedCol > 0 Then
+        coupaUsersGeneratedOnKnown = _
+            TryParseIsoDate(ws.Cells(headerRow + 1, generatedCol).Value, coupaUsersGeneratedOn)
+    End If
 
     Dim roster As Object
     Set roster = CreateObject("Scripting.Dictionary")
@@ -255,6 +298,11 @@ Private Function StatusHeaderNames() As Variant
     StatusHeaderNames = Array("Active", "Active?", "Status", "Account Status", "User Status")
 End Function
 
+' Header names the roster's generated-on stamp may go by.
+Private Function GeneratedOnHeaderNames() As Variant
+    GeneratedOnHeaderNames = Array("GeneratedOn", "Generated On", "Generated")
+End Function
+
 ' Whether a status value says this user cannot be a requester.
 '
 ' Verified against a real "Coupa Users List" export (2026-08-25, 42,399 rows). Its "Active" column
@@ -296,4 +344,43 @@ Private Function IsInactiveStatus(ByVal value As Variant) As Boolean
         Case "inactive", "deleted", "false", "no", "0"
             IsInactiveStatus = True
     End Select
+End Function
+
+' Parses "YYYY-MM-DD" without going through CDate.
+'
+' CDate honours the machine's locale, so the same text can parse differently on two
+' machines -- and silently, since 2026-08-26 is a valid date read either way round. Parsing
+' the parts explicitly makes the reading of an ISO stamp locale-independent.
+Private Function TryParseIsoDate(ByVal value As Variant, ByRef parsed As Date) As Boolean
+    If IsError(value) Or IsNull(value) Then Exit Function
+
+    ' A column typed as a date by Power Query arrives as a real Date already.
+    If VarType(value) = vbDate Then
+        parsed = CDate(value)
+        TryParseIsoDate = True
+        Exit Function
+    End If
+
+    Dim text As String
+    text = Trim$(CStr(value))
+    If Len(text) < 10 Then Exit Function
+
+    Dim parts As Variant
+    parts = Split(Left$(text, 10), "-")
+    If UBound(parts) <> 2 Then Exit Function
+
+    If Not (IsNumeric(parts(0)) And IsNumeric(parts(1)) And IsNumeric(parts(2))) Then
+        Exit Function
+    End If
+
+    On Error Resume Next
+    parsed = DateSerial(CLng(parts(0)), CLng(parts(1)), CLng(parts(2)))
+    TryParseIsoDate = (Err.Number = 0)
+    On Error GoTo 0
+End Function
+
+' Days after which the roster counts as stale. A core rule, not a tenant fact: it describes
+' how often the shared pipeline is expected to publish.
+Private Function CoupaUsersStalenessDays() As Long
+    CoupaUsersStalenessDays = 3
 End Function
