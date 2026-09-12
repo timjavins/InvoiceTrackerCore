@@ -282,8 +282,18 @@ Each script exits 0 on all-pass, 1 on any failure, so they are CI-usable as-is.
 It never attaches to a running Excel instance and never opens a workbook you have open. Each run
 creates its own hidden `Excel.Application`, adds an empty workbook, injects the modules under test
 as a **standard** module, calls functions with `Application.Run`, then closes without saving and
-deletes its temp file. A standard module matters: code in `ThisWorkbook` only resolves as
-`ThisWorkbook.Proc`, which is a needless complication for testing leaf modules.
+deletes its temp file.
+
+The standard module is a deliberate simplification with a real cost. `Application.Run` cannot
+resolve an unqualified name in a document module, and even when qualified as `ThisWorkbook.Proc` it
+executes the procedure but **discards a `Function`'s return value** — so assertions would be
+impossible there. A standard module sidesteps both.
+
+The cost is that a standard module allows things a document module forbids: `Public Const`, public
+fixed-size arrays, fixed-length strings, `Declare`. **A module can pass every test here and still
+fail to compile in the real stack.** That gap is closed separately, by compiling the assembled stack
+in a scratch workbook and asserting against it through the Excel MCP, whose `run_macro` does return
+values from document-module functions. Both layers are needed; neither substitutes for the other.
 ```
 
 - [ ] **Step 7: Commit**
@@ -888,7 +898,27 @@ $stack = 'C:\Users\p4bn\Documents\SecuritasAutomation\Securitas-Invoice-Tracker_
 
 Expected: `Definitions = 1` for every name. Any 2 is a collision with existing tenant code and must be resolved by renaming the new function (core is the newcomer here, so core yields).
 
-- [ ] **Step 5: Restore the stack file**
+- [ ] **Step 5: Assert against the assembled stack, in a document module**
+
+Everything up to here tested `FiscalCalendar.vb` injected into a **standard** module. Production is `ThisWorkbook`, a **document** module, which forbids `Public Const`, public fixed-size arrays, fixed-length strings and `Declare`. This module was written to avoid all of those — but "was written to" is not "was verified to".
+
+Paste the assembled stack into `ThisWorkbook` of a **scratch copy** of a tracker workbook (never a live one), Debug > Compile, then call into it over the Excel MCP. `run_macro` returns the value of a `Function` in a document module, reporting `invoked_via: "com_method"`. Requires Excel's Trust Center VBA access (on, on this machine).
+
+| Call | Args | Expected |
+| --- | --- | --- |
+| `ThisWorkbook.FiscalCalendarSelfCheck` | — | `ok` |
+| `ThisWorkbook.FiscalYearWeeks` | `[2026]` | `52` |
+| `ThisWorkbook.FiscalYearWeeks` | `[2023]` | `53` |
+| `ThisWorkbook.FiscalMonthWeeks` | `[2026, 7]` | `4` |
+| `ThisWorkbook.FiscalMonthWeeks` | `[2023, 12]` | `5` |
+| `ThisWorkbook.FiscalWeekOf` | `["2026-09-27"]` | `35` |
+| `ThisWorkbook.FiscalMonthOf` | `["2026-08-30"]` | `8` |
+
+The last two are the ones worth the trouble: fiscal September starting in calendar August is the case the whole module exists for, and it now gets checked in the environment the code actually runs in.
+
+If a date argument fails to marshal, pass the Excel serial number instead — the date-parsing path is already covered by the PowerShell suite, so this table only needs to prove the module works *here*.
+
+- [ ] **Step 6: Restore the stack file**
 
 Step 2 overwrote a tracked build artifact. Leave the repo as it was found — this plan's deliverable is core's module, not a regenerated Securitas artifact.
 
@@ -900,18 +930,23 @@ git status --short
 
 Expected: clean, or at least no modification to the megastack.
 
-- [ ] **Step 6: Commit the verification note**
+- [ ] **Step 7: Commit the verification note**
 
 No source changed, so commit the ticked plan and record what was proven.
 
 ```bash
 git add docs/superpowers/plans/2026-09-11-fiscal-calendar.md
-git commit -m "docs: confirm FiscalCalendar stacks cleanly into a real variant
+git commit -m "docs: confirm FiscalCalendar stacks and runs inside a document module
 
 Stacked against SecuritasAutomation: no filename collision, module present in the
 output with its provenance marker, no declarations hoisted, and every exported
 procedure name defined exactly once. The stacker does not check for duplicate
 procedure names, so that last check was done by hand.
+
+Then asserted against the assembled stack pasted into ThisWorkbook of a scratch
+workbook, since the unit tests inject into a standard module and a document module
+forbids things a standard module allows. Fiscal September starting in calendar
+August is now checked in the environment the code actually runs in.
 
 Noted for future automation: Stack-VBFiles.ps1 ends in a bare Read-Host, so a
 scripted caller must redirect stdin (< NUL) or it hangs."
