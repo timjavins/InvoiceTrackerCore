@@ -1,0 +1,70 @@
+# Nordstrom 4-5-4 fiscal calendar ground truth, FY2005-FY2050.
+#
+# Test oracle for FiscalCalendar.vb. NOT a runtime input -- the module computes
+# the calendar from the anchor rule and never reads this file at run time. It is
+# here so the computation stays regression-tested with no network call and no
+# dependency on a Finance-owned workbook continuing to exist in its present form.
+#
+# The canonical copy of this fixture, and the language-agnostic statement of the
+# rule, live in the sibling `4-5-4-calculator` folder. VBA has no package
+# manager, so a copy here is the same arrangement as Stack-VBFiles.ps1: when one
+# changes, copy it out.
+#
+# Extracted 2026-09-11 from:
+#   https://nordstrom.sharepoint.com/sites/NordstromEnterpriseMedia/
+#       Shared Documents/Finance/Calendars/454_calendar.xlsx
+#
+# Verified against every row below, no exceptions:
+#   - every week1_start is a Sunday; every year_end is a Saturday
+#   - year_end is the Saturday closest to 31 January of the following year
+#   - weeks = 53 exactly when the gap from the prior year_end is 371 days, else 364
+#   - every 52-week year runs 4,5,4 per quarter (4,5,4,4,5,4,4,5,4,4,5,4)
+#   - every 53-week year puts the extra week in January (4,5,4,4,5,4,4,5,4,4,5,5)
+#
+fiscal_year,week1_start,year_end,weeks
+2005,2005-01-30,2006-01-28,52
+2006,2006-01-29,2007-02-03,53
+2007,2007-02-04,2008-02-02,52
+2008,2008-02-03,2009-01-31,52
+2009,2009-02-01,2010-01-30,52
+2010,2010-01-31,2011-01-29,52
+2011,2011-01-30,2012-01-28,52
+2012,2012-01-29,2013-02-02,53
+2013,2013-02-03,2014-02-01,52
+2014,2014-02-02,2015-01-31,52
+2015,2015-02-01,2016-01-30,52
+2016,2016-01-31,2017-01-28,52
+2017,2017-01-29,2018-02-03,53
+2018,2018-02-04,2019-02-02,52
+2019,2019-02-03,2020-02-01,52
+2020,2020-02-02,2021-01-30,52
+2021,2021-01-31,2022-01-29,52
+2022,2022-01-30,2023-01-28,52
+2023,2023-01-29,2024-02-03,53
+2024,2024-02-04,2025-02-01,52
+2025,2025-02-02,2026-01-31,52
+2026,2026-02-01,2027-01-30,52
+2027,2027-01-31,2028-01-29,52
+2028,2028-01-30,2029-02-03,53
+2029,2029-02-04,2030-02-02,52
+2030,2030-02-03,2031-02-01,52
+2031,2031-02-02,2032-01-31,52
+2032,2032-02-01,2033-01-29,52
+2033,2033-01-30,2034-01-28,52
+2034,2034-01-29,2035-02-03,53
+2035,2035-02-04,2036-02-02,52
+2036,2036-02-03,2037-01-31,52
+2037,2037-02-01,2038-01-30,52
+2038,2038-01-31,2039-01-29,52
+2039,2039-01-30,2040-01-28,52
+2040,2040-01-29,2041-02-02,53
+2041,2041-02-03,2042-02-01,52
+2042,2042-02-02,2043-01-31,52
+2043,2043-02-01,2044-01-30,52
+2044,2044-01-31,2045-01-28,52
+2045,2045-01-29,2046-02-03,53
+2046,2046-02-04,2047-02-02,52
+2047,2047-02-03,2048-02-01,52
+2048,2048-02-02,2049-01-30,52
+2049,2049-01-31,2050-01-29,52
+2050,2050-01-30,2051-01-28,52
