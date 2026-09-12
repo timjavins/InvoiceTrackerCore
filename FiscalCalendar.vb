@@ -25,3 +25,31 @@
 Public Function FiscalCalendarSelfCheck() As String
     FiscalCalendarSelfCheck = "ok"
 End Function
+
+' The Saturday nearest a given date. Ties cannot occur: a date is at most 3 days from one
+' Saturday and at least 4 from the other, so "forward if 3 or fewer, else back" is total.
+Public Function SaturdayClosestTo(ByVal anchor As Date) As Date
+    Dim dow As Long
+    dow = Weekday(anchor, vbSunday)      ' 1 = Sunday ... 7 = Saturday
+
+    Dim forwardDays As Long
+    forwardDays = 7 - dow                ' 0 when anchor is already Saturday
+
+    If forwardDays <= 3 Then
+        SaturdayClosestTo = anchor + forwardDays
+    Else
+        SaturdayClosestTo = anchor - dow ' the previous Saturday
+    End If
+End Function
+
+' Last day of the fiscal year: the Saturday closest to 31 January of the FOLLOWING calendar year.
+Public Function FiscalYearEnd(ByVal fiscalYear As Long) As Date
+    FiscalYearEnd = SaturdayClosestTo(DateSerial(fiscalYear + 1, 1, 31))
+End Function
+
+' First day of the fiscal year -- the Sunday after the previous year ended. Derived from the
+' previous year's anchor rather than from this year's, so the two can never disagree about
+' where the boundary is.
+Public Function FiscalYearStart(ByVal fiscalYear As Long) As Date
+    FiscalYearStart = FiscalYearEnd(fiscalYear - 1) + 1
+End Function
