@@ -53,3 +53,15 @@ End Function
 Public Function FiscalYearStart(ByVal fiscalYear As Long) As Date
     FiscalYearStart = FiscalYearEnd(fiscalYear - 1) + 1
 End Function
+
+' 52 or 53. A year is long exactly when its anchor-to-anchor span is 371 days rather than 364 --
+' which is how the leap-year drift the anchor absorbs becomes visible as a whole extra week.
+'
+' Deliberately NOT a periodicity rule. The long years are 2006, 2012, 2017, 2023, 2028, 2034,
+' 2040, 2045 -- gaps of 6,5,6,5,6,6,5. That is not a 5-6 alternation (2028 -> 2034 -> 2040 is two
+' consecutive sixes), so anything counting years since the last long one is wrong twice this century.
+Public Function FiscalYearWeeks(ByVal fiscalYear As Long) As Long
+    Dim spanDays As Long
+    spanDays = CLng(FiscalYearEnd(fiscalYear) - FiscalYearEnd(fiscalYear - 1))
+    FiscalYearWeeks = spanDays \ 7
+End Function

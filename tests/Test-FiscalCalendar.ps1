@@ -25,6 +25,10 @@ try {
                      -Actual (Invoke-VbaFunction -VbaHost $vba -Name 'FiscalYearStart' -Arguments @($fy)) `
                      -Because "FY$fy week 1 start"
 
+        Assert-Equal -Expected $row.weeks `
+                     -Actual (Invoke-VbaFunction -VbaHost $vba -Name 'FiscalYearWeeks' -Arguments @($fy)) `
+                     -Because "FY$fy week count"
+
         # Every year end is a Saturday, every year start a Sunday. Asserted directly rather
         # than trusted, because a rule that is off by one day still matches on some years.
         $end   = [datetime](Invoke-VbaFunction -VbaHost $vba -Name 'FiscalYearEnd'   -Arguments @($fy))
@@ -32,6 +36,13 @@ try {
         Assert-Equal -Expected 'Saturday' -Actual $end.DayOfWeek   -Because "FY$fy ends on a Saturday"
         Assert-Equal -Expected 'Sunday'   -Actual $start.DayOfWeek -Because "FY$fy starts on a Sunday"
     }
+
+    $expected53 = @(2006, 2012, 2017, 2023, 2028, 2034, 2040, 2045)
+    $actual53 = @($fixture | Where-Object {
+        (Invoke-VbaFunction -VbaHost $vba -Name 'FiscalYearWeeks' -Arguments @($_.fiscal_year)) -eq 53
+    } | ForEach-Object { $_.fiscal_year })
+    Assert-Equal -Expected ($expected53 -join ',') -Actual ($actual53 -join ',') `
+                 -Because '53-week years are exactly the eight known ones'
 
     # The anchor helper, at both tie-break directions. 31 Jan 2026 IS a Saturday (no move);
     # 31 Jan 2027 is a Sunday (move back 1); 31 Jan 2007 is a Wednesday (move forward 3).
