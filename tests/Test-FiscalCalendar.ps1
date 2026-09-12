@@ -85,7 +85,8 @@ try {
     Assert-Equal -Expected '2026-02-01' -Actual (Invoke-VbaFunction -VbaHost $vba -Name 'FiscalMonthStart' -Arguments @(2026, 1))  -Because 'FY2026 February starts'
     Assert-Equal -Expected '2026-03-01' -Actual (Invoke-VbaFunction -VbaHost $vba -Name 'FiscalMonthStart' -Arguments @(2026, 2))  -Because 'FY2026 March starts'
     Assert-Equal -Expected '2026-04-05' -Actual (Invoke-VbaFunction -VbaHost $vba -Name 'FiscalMonthStart' -Arguments @(2026, 3))  -Because 'FY2026 April starts'
-    Assert-Equal -Expected '2026-08-30' -Actual (Invoke-VbaFunction -VbaHost $vba -Name 'FiscalMonthStart' -Arguments @(2026, 7))  -Because 'FY2026 September starts'
+    Assert-Equal -Expected '2026-08-02' -Actual (Invoke-VbaFunction -VbaHost $vba -Name 'FiscalMonthStart' -Arguments @(2026, 7))  -Because 'FY2026 August starts (fiscal month 7, the index that is easy to confuse with September)'
+    Assert-Equal -Expected '2026-08-30' -Actual (Invoke-VbaFunction -VbaHost $vba -Name 'FiscalMonthStart' -Arguments @(2026, 8))  -Because 'FY2026 September starts'
     Assert-Equal -Expected '2027-01-03' -Actual (Invoke-VbaFunction -VbaHost $vba -Name 'FiscalMonthStart' -Arguments @(2026, 12)) -Because 'FY2026 January starts'
 
     # Week starts: first, a mid-year one, and the last week of a 52-week year.
