@@ -42,3 +42,10 @@ values from document-module functions. Both layers are needed; neither substitut
 a syntax error only surfaces later, as a confusing COM error at the first `Application.Run`. If a
 red run looks like the harness itself is broken, check the injected source for a syntax error
 before suspecting the harness.
+
+## Never test a path that raises
+
+A test must never call a VBA procedure that will `Err.Raise`. An unhandled VBA error under
+`Application.Run` opens a modal End/Debug dialog; in the harness's hidden Excel instance nothing
+can dismiss it, the COM call blocks forever, and the dialog can surface in the user's own Excel
+session. Guard clauses are verified by code review, not by this suite.

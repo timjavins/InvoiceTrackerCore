@@ -122,3 +122,84 @@ Public Function FiscalWeekStart(ByVal fiscalYear As Long, ByVal weekNumber As Lo
 
     FiscalWeekStart = FiscalYearStart(fiscalYear) + ((weekNumber - 1) * 7)
 End Function
+
+' Which fiscal year a date falls in.
+'
+' Seeded from the calendar year and then corrected, rather than searched. A date in January or
+' early February can belong to the previous fiscal year, and a late-January date can already
+' belong to the next one, so both directions need checking -- one-sided correction is the bug
+' waiting to happen here.
+Public Function FiscalYearOf(ByVal d As Date) As Long
+    ' CLng rounds a Date; Int truncates. A time component must not shift which fiscal
+    ' year a date belongs to, so the date part is isolated up front and used throughout.
+    Dim dt As Date
+    dt = Int(d)
+
+    Dim fy As Long
+    fy = Year(dt)
+
+    If dt < FiscalYearStart(fy) Then
+        fy = fy - 1
+    ElseIf dt > FiscalYearEnd(fy) Then
+        fy = fy + 1
+    End If
+
+    FiscalYearOf = fy
+End Function
+
+' 1-based fiscal week number of a date, within its own fiscal year.
+Public Function FiscalWeekOf(ByVal d As Date) As Long
+    ' CLng rounds a Date; Int truncates. A time component must not shift the fiscal week,
+    ' so the date part is isolated up front and used throughout.
+    Dim dt As Date
+    dt = Int(d)
+
+    Dim fy As Long
+    fy = FiscalYearOf(dt)
+    FiscalWeekOf = ((CLng(dt) - CLng(FiscalYearStart(fy))) \ 7) + 1
+End Function
+
+' The Sunday that begins the fiscal week containing a date. This is the value the guard
+' tracker stores in its FISCAL WEEK column, and the value the PO key encodes.
+Public Function FiscalWeekStartOf(ByVal d As Date) As Date
+    ' CLng rounds a Date; Int truncates. A time component must not shift the fiscal week,
+    ' so the date part is isolated up front and used throughout.
+    Dim dt As Date
+    dt = Int(d)
+
+    Dim fy As Long
+    fy = FiscalYearOf(dt)
+    FiscalWeekStartOf = FiscalWeekStart(fy, FiscalWeekOf(dt))
+End Function
+
+' Fiscal month of a date: 1-12 where 1 = February, 12 = January.
+'
+' Walks the month lengths rather than dividing, because month lengths are not uniform -- and in
+' a 53-week year the last month is longer still.
+Public Function FiscalMonthOf(ByVal d As Date) As Long
+    ' CLng rounds a Date; Int truncates. A time component must not shift the fiscal month,
+    ' so the date part is isolated up front and used throughout.
+    Dim dt As Date
+    dt = Int(d)
+
+    Dim fy As Long
+    fy = FiscalYearOf(dt)
+
+    Dim week As Long
+    week = FiscalWeekOf(dt)
+
+    Dim m As Long
+    Dim cumulative As Long
+    For m = 1 To 12
+        cumulative = cumulative + FiscalMonthWeeks(fy, m)
+        If week <= cumulative Then
+            FiscalMonthOf = m
+            Exit Function
+        End If
+    Next m
+
+    ' Unreachable while month weeks sum to the year's week count, which the tests assert for
+    ' every published year. Raising beats returning 0 and letting a caller index an array with it.
+    Err.Raise 5, "FiscalMonthOf", _
+        "Could not place " & Format$(dt, "yyyy-mm-dd") & " in FY" & fy & " (week " & week & ")."
+End Function
