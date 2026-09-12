@@ -63,5 +63,62 @@ End Function
 Public Function FiscalYearWeeks(ByVal fiscalYear As Long) As Long
     Dim spanDays As Long
     spanDays = CLng(FiscalYearEnd(fiscalYear) - FiscalYearEnd(fiscalYear - 1))
+    ' CLng rounds rather than truncates; this is safe only because FiscalYearEnd returns DateSerial values with no time component.
     FiscalYearWeeks = spanDays \ 7
+End Function
+
+' Weeks in a fiscal month. fiscalMonth is 1-12 where 1 = February, 12 = January.
+'
+' The cycle is 4,5,4 per quarter, so the 5-week months are the second of each quarter --
+' fiscal months 2, 5, 8, 11, i.e. those where fiscalMonth Mod 3 = 2. In a 53-week year the
+' extra week lands on January (month 12), making it 5 and its quarter 14 weeks.
+Public Function FiscalMonthWeeks(ByVal fiscalYear As Long, ByVal fiscalMonth As Long) As Long
+    If fiscalMonth < 1 Or fiscalMonth > 12 Then
+        Err.Raise 5, "FiscalMonthWeeks", _
+            "fiscalMonth must be 1-12 (1 = February, 12 = January); got " & fiscalMonth & "."
+    End If
+
+    Dim weeks As Long
+    If fiscalMonth Mod 3 = 2 Then
+        weeks = 5
+    Else
+        weeks = 4
+    End If
+
+    If fiscalMonth = 12 Then
+        If FiscalYearWeeks(fiscalYear) = 53 Then weeks = weeks + 1
+    End If
+
+    FiscalMonthWeeks = weeks
+End Function
+
+' First day (a Sunday) of a fiscal month.
+Public Function FiscalMonthStart(ByVal fiscalYear As Long, ByVal fiscalMonth As Long) As Date
+    If fiscalMonth < 1 Or fiscalMonth > 12 Then
+        Err.Raise 5, "FiscalMonthStart", _
+            "fiscalMonth must be 1-12 (1 = February, 12 = January); got " & fiscalMonth & "."
+    End If
+
+    Dim weeksBefore As Long
+    Dim i As Long
+    For i = 1 To fiscalMonth - 1
+        weeksBefore = weeksBefore + FiscalMonthWeeks(fiscalYear, i)
+    Next i
+
+    FiscalMonthStart = FiscalYearStart(fiscalYear) + (weeksBefore * 7)
+End Function
+
+' First day (a Sunday) of a fiscal week. weekNumber is 1-based and must fall inside the year,
+' which is 52 or 53 weeks long -- asking for week 53 of a 52-week year is a caller bug, not a
+' value to guess at.
+Public Function FiscalWeekStart(ByVal fiscalYear As Long, ByVal weekNumber As Long) As Date
+    Dim total As Long
+    total = FiscalYearWeeks(fiscalYear)
+
+    If weekNumber < 1 Or weekNumber > total Then
+        Err.Raise 5, "FiscalWeekStart", _
+            "weekNumber must be 1-" & total & " for FY" & fiscalYear & "; got " & weekNumber & "."
+    End If
+
+    FiscalWeekStart = FiscalYearStart(fiscalYear) + ((weekNumber - 1) * 7)
 End Function
