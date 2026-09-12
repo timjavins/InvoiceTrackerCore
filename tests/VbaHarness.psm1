@@ -9,31 +9,46 @@ Set-StrictMode -Version Latest
 function New-VbaHost {
     param([Parameter(Mandatory)][string[]] $SourceFiles)
 
+    # Validate every source path BEFORE any COM object exists. Nothing can leak a hidden
+    # Excel process if nothing was created yet -- and this validation is the one most likely
+    # to fail (a typo'd path, a task run before its .vb file exists), so it must not need
+    # cleanup at all. Do not move this below New-Object "for tidiness": that reintroduces the
+    # leak this check exists to prevent.
+    foreach ($file in $SourceFiles) {
+        if (-not (Test-Path -LiteralPath $file)) { throw "Source file not found: $file" }
+    }
+
     # New-Object -ComObject creates a SEPARATE instance. Never use GetActiveObject here:
     # that would attach to the user's Excel and run test code beside live workbooks.
     $excel = New-Object -ComObject Excel.Application
     $excel.Visible = $false
     $excel.DisplayAlerts = $false
 
-    $wb = $excel.Workbooks.Add()
-
     try {
-        $project = $wb.VBProject
+        $wb = $excel.Workbooks.Add()
+
+        try {
+            $project = $wb.VBProject
+        } catch {
+            throw "Cannot reach the VBA project. Enable Excel > File > Options > Trust Center > " +
+                  "Trust Center Settings > Macro Settings > 'Trust access to the VBA project object model', " +
+                  "then re-run. Excel said: $($_.Exception.Message)"
+        }
+
+        # 1 = vbext_ct_StdModule. A standard module (not ThisWorkbook) so Application.Run
+        # resolves unqualified names -- a class module would require 'ThisWorkbook.Proc'.
+        $module = $project.VBComponents.Add(1)
+
+        foreach ($file in $SourceFiles) {
+            $source = Get-Content -LiteralPath $file -Raw -Encoding UTF8
+            $module.CodeModule.AddFromString($source)
+        }
     } catch {
-        $excel.Quit()
-        throw "Cannot reach the VBA project. Enable Excel > File > Options > Trust Center > " +
-              "Trust Center Settings > Macro Settings > 'Trust access to the VBA project object model', " +
-              "then re-run. Excel said: $($_.Exception.Message)"
-    }
-
-    # 1 = vbext_ct_StdModule. A standard module (not ThisWorkbook) so Application.Run
-    # resolves unqualified names -- a class module would require 'ThisWorkbook.Proc'.
-    $module = $project.VBComponents.Add(1)
-
-    foreach ($file in $SourceFiles) {
-        if (-not (Test-Path -LiteralPath $file)) { throw "Source file not found: $file" }
-        $source = Get-Content -LiteralPath $file -Raw -Encoding UTF8
-        $module.CodeModule.AddFromString($source)
+        try { $excel.Quit() } catch { }
+        foreach ($obj in $wb, $excel) {
+            if ($obj) { try { [void][Runtime.InteropServices.Marshal]::ReleaseComObject($obj) } catch { } }
+        }
+        throw
     }
 
     $temp = Join-Path $env:TEMP ("vbatest_{0}.xlsm" -f [guid]::NewGuid().ToString('N'))
