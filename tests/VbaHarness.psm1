@@ -18,13 +18,22 @@ function New-VbaHost {
         if (-not (Test-Path -LiteralPath $file)) { throw "Source file not found: $file" }
     }
 
-    # New-Object -ComObject creates a SEPARATE instance. Never use GetActiveObject here:
-    # that would attach to the user's Excel and run test code beside live workbooks.
-    $excel = New-Object -ComObject Excel.Application
-    $excel.Visible = $false
-    $excel.DisplayAlerts = $false
+    # Initialise both to $null before the try so the catch's cleanup can safely test for
+    # either one -- under Set-StrictMode, referencing an unset variable throws, which would
+    # otherwise mask the real error with an unrelated "variable has not been set" failure.
+    $excel = $null
+    $wb = $null
 
     try {
+        # New-Object -ComObject creates a SEPARATE instance. Never use GetActiveObject here:
+        # that would attach to the user's Excel and run test code beside live workbooks.
+        # This whole block -- construction, property assignment, workbook creation, VBProject
+        # access, module injection -- is inside one try so nothing between "Excel exists" and
+        # "the host is fully built" can leak a hidden process on failure.
+        $excel = New-Object -ComObject Excel.Application
+        $excel.Visible = $false
+        $excel.DisplayAlerts = $false
+
         $wb = $excel.Workbooks.Add()
 
         try {
@@ -44,16 +53,14 @@ function New-VbaHost {
             $module.CodeModule.AddFromString($source)
         }
     } catch {
-        try { $excel.Quit() } catch { }
+        if ($excel) { try { $excel.Quit() } catch { } }
         foreach ($obj in $wb, $excel) {
             if ($obj) { try { [void][Runtime.InteropServices.Marshal]::ReleaseComObject($obj) } catch { } }
         }
         throw
     }
 
-    $temp = Join-Path $env:TEMP ("vbatest_{0}.xlsm" -f [guid]::NewGuid().ToString('N'))
-
-    @{ Excel = $excel; Workbook = $wb; TempPath = $temp }
+    @{ Excel = $excel; Workbook = $wb }
 }
 
 function Invoke-VbaFunction {
@@ -79,9 +86,6 @@ function Remove-VbaHost {
         if ($VbaHost[$key]) {
             try { [void][Runtime.InteropServices.Marshal]::ReleaseComObject($VbaHost[$key]) } catch { }
         }
-    }
-    if ($VbaHost.TempPath -and (Test-Path -LiteralPath $VbaHost.TempPath)) {
-        Remove-Item -LiteralPath $VbaHost.TempPath -Force -ErrorAction SilentlyContinue
     }
     [GC]::Collect()
     $null

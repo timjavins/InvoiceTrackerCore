@@ -23,8 +23,9 @@ Each script exits 0 on all-pass, 1 on any failure, so they are CI-usable as-is.
 
 It never attaches to a running Excel instance and never opens a workbook you have open. Each run
 creates its own hidden `Excel.Application`, adds an empty workbook, injects the modules under test
-as a **standard** module, calls functions with `Application.Run`, then closes without saving and
-deletes its temp file.
+as a **standard** module, calls functions with `Application.Run`, then closes without saving. The
+workbook only ever exists in memory -- nothing calls `SaveAs` -- so there is no temp file on disk
+to clean up.
 
 The standard module is a deliberate simplification with a real cost. `Application.Run` cannot
 resolve an unqualified name in a document module, and even when qualified as `ThisWorkbook.Proc` it
@@ -36,3 +37,8 @@ fixed-size arrays, fixed-length strings, `Declare`. **A module can pass every te
 fail to compile in the real stack.** That gap is closed separately, by compiling the assembled stack
 in a scratch workbook and asserting against it through the Excel MCP, whose `run_macro` does return
 values from document-module functions. Both layers are needed; neither substitutes for the other.
+
+`CodeModule.AddFromString` does not validate VBA syntax -- it accepts the text unconditionally, and
+a syntax error only surfaces later, as a confusing COM error at the first `Application.Run`. If a
+red run looks like the harness itself is broken, check the injected source for a syntax error
+before suspecting the harness.
