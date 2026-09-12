@@ -126,9 +126,14 @@ End Function
 ' Which fiscal year a date falls in.
 '
 ' Seeded from the calendar year and then corrected, rather than searched. A date in January or
-' early February can belong to the previous fiscal year, and a late-January date can already
-' belong to the next one, so both directions need checking -- one-sided correction is the bug
-' waiting to happen here.
+' early February can belong to the previous fiscal year -- that is what the "fy - 1" branch
+' below is for.
+'
+' The "fy + 1" branch is unreachable given the current boundary definitions: FiscalYearEnd(fy)
+' always falls in calendar year fy+1 (a Saturday near 31 January of that year), so for any date
+' whose Year() is fy, d <= 31-Dec-fy < FiscalYearEnd(fy) always holds, and the ElseIf never
+' fires. It is kept anyway as defence against a future change to FiscalYearStart/FiscalYearEnd's
+' definitions, in the same spirit as FiscalMonthOf's trailing Err.Raise.
 Public Function FiscalYearOf(ByVal d As Date) As Long
     ' CLng rounds a Date; Int truncates. A time component must not shift which fiscal
     ' year a date belongs to, so the date part is isolated up front and used throughout.

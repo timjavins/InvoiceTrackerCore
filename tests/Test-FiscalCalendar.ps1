@@ -101,6 +101,10 @@ try {
         Assert-Equal -Expected $fy -Actual (Invoke-VbaFunction -VbaHost $vba -Name 'FiscalYearOf' -Arguments @($row.week1_start)) -Because "FY$fy starts inside FY$fy"
         Assert-Equal -Expected $fy -Actual (Invoke-VbaFunction -VbaHost $vba -Name 'FiscalYearOf' -Arguments @($row.year_end))    -Because "FY$fy ends inside FY$fy"
         Assert-Equal -Expected ($fy - 1) -Actual (Invoke-VbaFunction -VbaHost $vba -Name 'FiscalYearOf' -Arguments @($row.week1_start.AddDays(-1))) -Because "day before FY$fy belongs to FY$($fy-1)"
+        # This does NOT exercise FiscalYearOf's "fy + 1" branch: year_end.AddDays(1) is
+        # FiscalYearStart(fy+1), whose Year() is already fy+1, so the seed is already correct
+        # and no correction fires. Kept anyway as a boundary check that the day after a year
+        # end belongs to the next fiscal year -- a real property, just not a test of that branch.
         Assert-Equal -Expected ($fy + 1) -Actual (Invoke-VbaFunction -VbaHost $vba -Name 'FiscalYearOf' -Arguments @($row.year_end.AddDays(1)))     -Because "day after FY$fy belongs to FY$($fy+1)"
 
         Assert-Equal -Expected 1 -Actual (Invoke-VbaFunction -VbaHost $vba -Name 'FiscalWeekOf' -Arguments @($row.week1_start)) -Because "FY$fy first day is week 1"
