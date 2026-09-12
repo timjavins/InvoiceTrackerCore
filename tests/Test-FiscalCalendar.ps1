@@ -93,6 +93,49 @@ try {
     Assert-Equal -Expected '2026-02-01' -Actual (Invoke-VbaFunction -VbaHost $vba -Name 'FiscalWeekStart' -Arguments @(2026, 1))  -Because 'FY2026 week 1 start'
     Assert-Equal -Expected '2026-09-27' -Actual (Invoke-VbaFunction -VbaHost $vba -Name 'FiscalWeekStart' -Arguments @(2026, 35)) -Because 'FY2026 week 35 start'
     Assert-Equal -Expected '2027-01-24' -Actual (Invoke-VbaFunction -VbaHost $vba -Name 'FiscalWeekStart' -Arguments @(2026, 52)) -Because 'FY2026 week 52 start'
+
+    # Round-trip: every fixture year's boundaries resolve back to that year, and the day
+    # either side belongs to the neighbouring year. Boundary-off-by-one is the likely bug here.
+    foreach ($row in $fixture) {
+        $fy = $row.fiscal_year
+        Assert-Equal -Expected $fy -Actual (Invoke-VbaFunction -VbaHost $vba -Name 'FiscalYearOf' -Arguments @($row.week1_start)) -Because "FY$fy starts inside FY$fy"
+        Assert-Equal -Expected $fy -Actual (Invoke-VbaFunction -VbaHost $vba -Name 'FiscalYearOf' -Arguments @($row.year_end))    -Because "FY$fy ends inside FY$fy"
+        Assert-Equal -Expected ($fy - 1) -Actual (Invoke-VbaFunction -VbaHost $vba -Name 'FiscalYearOf' -Arguments @($row.week1_start.AddDays(-1))) -Because "day before FY$fy belongs to FY$($fy-1)"
+        Assert-Equal -Expected ($fy + 1) -Actual (Invoke-VbaFunction -VbaHost $vba -Name 'FiscalYearOf' -Arguments @($row.year_end.AddDays(1)))     -Because "day after FY$fy belongs to FY$($fy+1)"
+
+        Assert-Equal -Expected 1 -Actual (Invoke-VbaFunction -VbaHost $vba -Name 'FiscalWeekOf' -Arguments @($row.week1_start)) -Because "FY$fy first day is week 1"
+        Assert-Equal -Expected $row.weeks -Actual (Invoke-VbaFunction -VbaHost $vba -Name 'FiscalWeekOf' -Arguments @($row.year_end)) -Because "FY$fy last day is week $($row.weeks)"
+    }
+
+    # Known FY2026 points, including the fiscal September that starts in calendar August.
+    Assert-Equal -Expected 2026 -Actual (Invoke-VbaFunction -VbaHost $vba -Name 'FiscalYearOf'  -Arguments @([datetime]'2026-09-27')) -Because '2026-09-27 is in FY2026'
+    Assert-Equal -Expected 35   -Actual (Invoke-VbaFunction -VbaHost $vba -Name 'FiscalWeekOf'  -Arguments @([datetime]'2026-09-27')) -Because '2026-09-27 is fiscal week 35'
+    Assert-Equal -Expected 8    -Actual (Invoke-VbaFunction -VbaHost $vba -Name 'FiscalMonthOf' -Arguments @([datetime]'2026-09-27')) -Because '2026-09-27 is in fiscal September (month 8)'
+    Assert-Equal -Expected 8    -Actual (Invoke-VbaFunction -VbaHost $vba -Name 'FiscalMonthOf' -Arguments @([datetime]'2026-08-30')) -Because '2026-08-30 is already fiscal September'
+    Assert-Equal -Expected 7    -Actual (Invoke-VbaFunction -VbaHost $vba -Name 'FiscalMonthOf' -Arguments @([datetime]'2026-08-29')) -Because '2026-08-29 is still fiscal August'
+    Assert-Equal -Expected 1    -Actual (Invoke-VbaFunction -VbaHost $vba -Name 'FiscalMonthOf' -Arguments @([datetime]'2026-02-01')) -Because '2026-02-01 is fiscal February (month 1)'
+    Assert-Equal -Expected 12   -Actual (Invoke-VbaFunction -VbaHost $vba -Name 'FiscalMonthOf' -Arguments @([datetime]'2027-01-30')) -Because '2027-01-30 is fiscal January (month 12)'
+
+    # A mid-week date resolves to its week's Sunday. This is what the guards tracker stores.
+    Assert-Equal -Expected '2026-09-27' -Actual (Invoke-VbaFunction -VbaHost $vba -Name 'FiscalWeekStartOf' -Arguments @([datetime]'2026-10-01')) -Because 'a Thursday resolves back to its week Sunday'
+    Assert-Equal -Expected '2026-09-27' -Actual (Invoke-VbaFunction -VbaHost $vba -Name 'FiscalWeekStartOf' -Arguments @([datetime]'2026-09-27')) -Because 'a Sunday resolves to itself'
+
+    # The 35 consecutive week starts the guards tracker holds must all resolve to weeks 1-35 of FY2026.
+    for ($i = 0; $i -lt 35; $i++) {
+        $d = ([datetime]'2026-02-01').AddDays($i * 7)
+        Assert-Equal -Expected ($i + 1) -Actual (Invoke-VbaFunction -VbaHost $vba -Name 'FiscalWeekOf' -Arguments @($d)) `
+                     -Because "guards tracker week $($i + 1) ($($d.ToString('yyyy-MM-dd'))) is FY2026 week $($i + 1)"
+    }
+
+    # A date carrying an afternoon time must resolve exactly as its midnight equivalent does.
+    # CLng would round 2026-09-27 14:00 up to the 28th and shift the week; Int truncates.
+    Assert-Equal -Expected 35 -Actual (Invoke-VbaFunction -VbaHost $vba -Name 'FiscalWeekOf' -Arguments @([datetime]'2026-09-27 14:00')) -Because 'an afternoon time does not shift the fiscal week'
+    Assert-Equal -Expected 2026 -Actual (Invoke-VbaFunction -VbaHost $vba -Name 'FiscalYearOf' -Arguments @([datetime]'2027-01-30 23:59')) -Because 'a late time on the last day stays in the same fiscal year'
+    Assert-Equal -Expected '2026-09-27' -Actual (Invoke-VbaFunction -VbaHost $vba -Name 'FiscalWeekStartOf' -Arguments @([datetime]'2026-10-01 09:30')) -Because 'a mid-week morning resolves to its week Sunday'
+
+    # Week 53 in a long year is otherwise untested. Guard clauses that would raise (invalid
+    # month/week numbers) are verified by code review, not by this suite -- see tests/README.md.
+    Assert-Equal -Expected '2024-01-28' -Actual (Invoke-VbaFunction -VbaHost $vba -Name 'FiscalWeekStart' -Arguments @(2023, 53)) -Because 'FY2023 is a 53-week year, so week 53 is valid and is its last week'
 } finally {
     Remove-VbaHost -VbaHost $vba | Out-Null
 }
