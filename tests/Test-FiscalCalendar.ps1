@@ -127,11 +127,30 @@ try {
                      -Because "guards tracker week $($i + 1) ($($d.ToString('yyyy-MM-dd'))) is FY2026 week $($i + 1)"
     }
 
-    # A date carrying an afternoon time must resolve exactly as its midnight equivalent does.
-    # CLng would round 2026-09-27 14:00 up to the 28th and shift the week; Int truncates.
-    Assert-Equal -Expected 35 -Actual (Invoke-VbaFunction -VbaHost $vba -Name 'FiscalWeekOf' -Arguments @([datetime]'2026-09-27 14:00')) -Because 'an afternoon time does not shift the fiscal week'
-    Assert-Equal -Expected 2026 -Actual (Invoke-VbaFunction -VbaHost $vba -Name 'FiscalYearOf' -Arguments @([datetime]'2027-01-30 23:59')) -Because 'a late time on the last day stays in the same fiscal year'
+    # A date carrying a time component must resolve exactly as its midnight equivalent does.
+    # These three are ordinary behavioural checks, not proof of the Int-vs-CLng fix: none of
+    # them actually discriminates. 2026-09-27 is itself the Sunday that starts week 35, so
+    # rounding 14:00 up to the 28th stays inside the same week. 2027-01-30 23:59 never reaches
+    # the CLng/Int conversion at all -- Year() and the date comparisons in FiscalYearOf work
+    # from the date's truncated part regardless of time-of-day, so this is exact either way.
+    # 2026-10-01 09:30 has a fraction under 0.5, so it rounds down to the same day truncation
+    # would give. See the Saturday-afternoon case below for the assertion that actually
+    # distinguishes Int from CLng.
+    Assert-Equal -Expected 35 -Actual (Invoke-VbaFunction -VbaHost $vba -Name 'FiscalWeekOf' -Arguments @([datetime]'2026-09-27 14:00')) -Because 'an afternoon time does not shift the fiscal week (mid-week; see the Saturday case for the discriminating test)'
+    Assert-Equal -Expected 2026 -Actual (Invoke-VbaFunction -VbaHost $vba -Name 'FiscalYearOf' -Arguments @([datetime]'2027-01-30 23:59')) -Because 'a late time on the last day of the fiscal year still resolves to that fiscal year (plain boundary check; Year() and the comparisons are exact regardless of time-of-day)'
     Assert-Equal -Expected '2026-09-27' -Actual (Invoke-VbaFunction -VbaHost $vba -Name 'FiscalWeekStartOf' -Arguments @([datetime]'2026-10-01 09:30')) -Because 'a mid-week morning resolves to its week Sunday'
+
+    # Saturday is the last day of a fiscal week, so rounding up crosses into the next one.
+    # This is the case that actually distinguishes Int from CLng: Int keeps week 35, CLng gives 36.
+    #
+    # Only the FiscalWeekOf assertion below can detect a rounding regression. FiscalWeekStartOf
+    # normalises its own input with Int() before calling FiscalWeekOf, so on that path FiscalWeekOf
+    # only ever receives a whole date and CLng would be exact. That per-function normalisation is
+    # deliberate defence in depth -- a caller passing Now() must get the right answer regardless of
+    # what a callee does -- and the cost is that it masks a callee's rounding bug. Hence the direct
+    # test. Verified: reverting FiscalWeekOf to CLng fails the first assertion and not the second.
+    Assert-Equal -Expected 35 -Actual (Invoke-VbaFunction -VbaHost $vba -Name 'FiscalWeekOf' -Arguments @([datetime]'2026-10-03 14:00')) -Because 'a Saturday afternoon stays in its own fiscal week (Int truncates; CLng would round into the next week)'
+    Assert-Equal -Expected '2026-09-27' -Actual (Invoke-VbaFunction -VbaHost $vba -Name 'FiscalWeekStartOf' -Arguments @([datetime]'2026-10-03 14:00')) -Because 'a Saturday afternoon resolves to its own week Sunday, not the next one'
 
     # Week 53 in a long year is otherwise untested. Guard clauses that would raise (invalid
     # month/week numbers) are verified by code review, not by this suite -- see tests/README.md.
