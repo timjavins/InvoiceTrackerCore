@@ -55,6 +55,43 @@ try {
     Assert-Equal -Expected '2007-02-03' `
                  -Actual (Invoke-VbaFunction -VbaHost $vba -Name 'SaturdayClosestTo' -Arguments @([datetime]'2007-01-31')) `
                  -Because 'anchor on a Wednesday moves forward three days'
+
+    # FY2026 is a 52-week year: 4,5,4 four times over.
+    $normal = @(4,5,4,4,5,4,4,5,4,4,5,4)
+    for ($m = 1; $m -le 12; $m++) {
+        Assert-Equal -Expected $normal[$m - 1] `
+                     -Actual (Invoke-VbaFunction -VbaHost $vba -Name 'FiscalMonthWeeks' -Arguments @(2026, $m)) `
+                     -Because "FY2026 fiscal month $m week count"
+    }
+
+    # FY2023 is a 53-week year: the extra week lands on January, the twelfth fiscal month.
+    $long = @(4,5,4,4,5,4,4,5,4,4,5,5)
+    for ($m = 1; $m -le 12; $m++) {
+        Assert-Equal -Expected $long[$m - 1] `
+                     -Actual (Invoke-VbaFunction -VbaHost $vba -Name 'FiscalMonthWeeks' -Arguments @(2023, $m)) `
+                     -Because "FY2023 (53-week) fiscal month $m week count"
+    }
+
+    # Month weeks must always sum to the year's week count, for every year in the fixture.
+    foreach ($row in $fixture) {
+        $sum = 0
+        for ($m = 1; $m -le 12; $m++) {
+            $sum += [int](Invoke-VbaFunction -VbaHost $vba -Name 'FiscalMonthWeeks' -Arguments @($row.fiscal_year, $m))
+        }
+        Assert-Equal -Expected $row.weeks -Actual $sum -Because "FY$($row.fiscal_year) month weeks sum to the year"
+    }
+
+    # Known month boundaries, read from the published FY2026 calendar.
+    Assert-Equal -Expected '2026-02-01' -Actual (Invoke-VbaFunction -VbaHost $vba -Name 'FiscalMonthStart' -Arguments @(2026, 1))  -Because 'FY2026 February starts'
+    Assert-Equal -Expected '2026-03-01' -Actual (Invoke-VbaFunction -VbaHost $vba -Name 'FiscalMonthStart' -Arguments @(2026, 2))  -Because 'FY2026 March starts'
+    Assert-Equal -Expected '2026-04-05' -Actual (Invoke-VbaFunction -VbaHost $vba -Name 'FiscalMonthStart' -Arguments @(2026, 3))  -Because 'FY2026 April starts'
+    Assert-Equal -Expected '2026-08-30' -Actual (Invoke-VbaFunction -VbaHost $vba -Name 'FiscalMonthStart' -Arguments @(2026, 7))  -Because 'FY2026 September starts'
+    Assert-Equal -Expected '2027-01-03' -Actual (Invoke-VbaFunction -VbaHost $vba -Name 'FiscalMonthStart' -Arguments @(2026, 12)) -Because 'FY2026 January starts'
+
+    # Week starts: first, a mid-year one, and the last week of a 52-week year.
+    Assert-Equal -Expected '2026-02-01' -Actual (Invoke-VbaFunction -VbaHost $vba -Name 'FiscalWeekStart' -Arguments @(2026, 1))  -Because 'FY2026 week 1 start'
+    Assert-Equal -Expected '2026-09-27' -Actual (Invoke-VbaFunction -VbaHost $vba -Name 'FiscalWeekStart' -Arguments @(2026, 35)) -Because 'FY2026 week 35 start'
+    Assert-Equal -Expected '2027-01-24' -Actual (Invoke-VbaFunction -VbaHost $vba -Name 'FiscalWeekStart' -Arguments @(2026, 52)) -Because 'FY2026 week 52 start'
 } finally {
     Remove-VbaHost -VbaHost $vba | Out-Null
 }
