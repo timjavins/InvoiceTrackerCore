@@ -843,7 +843,7 @@ The module is worthless if adding it breaks the assembler. This is a separate ta
 - Consumes: `FiscalCalendar.vb` complete (Tasks 2-5).
 - Produces: confirmation that `FiscalCalendar.vb` stacks cleanly into an existing variant.
 
-- [ ] **Step 1: Confirm no filename collision exists**
+- [x] **Step 1: Confirm no filename collision exists**
 
 The shadow rule keys on leaf filename, case-insensitively, across the whole recursive tree. A variant file also named `FiscalCalendar.vb` would silently shadow core's and win.
 
@@ -855,7 +855,7 @@ Get-ChildItem -Path 'C:\Users\p4bn\Documents\SecuritasAutomation','C:\Users\p4bn
 
 Expected: exactly one row, `InvoiceTrackerCore\FiscalCalendar.vb`. More than one means a collision — stop and rename before continuing.
 
-- [ ] **Step 2: Run the stacker for Securitas**
+- [x] **Step 2: Run the stacker for Securitas**
 
 Securitas is the right canary: its workbook already runs the assembled stack, so a problem shows up against real tenant code rather than a toy.
 
@@ -868,7 +868,7 @@ cmd /c "powershell -NoProfile -ExecutionPolicy Bypass -File .\Stack-VBFiles.ps1 
 
 Expected: completes without throwing, and its output mentions `FiscalCalendar.vb` among the stacked modules. Exit code 0.
 
-- [ ] **Step 3: Confirm the module landed in the output**
+- [x] **Step 3: Confirm the module landed in the output**
 
 ```powershell
 Select-String -Path 'C:\Users\p4bn\Documents\SecuritasAutomation\Securitas-Invoice-Tracker_MegaStack.vb' `
@@ -878,7 +878,7 @@ Select-String -Path 'C:\Users\p4bn\Documents\SecuritasAutomation\Securitas-Invoi
 
 Expected: both patterns found. The `from FiscalCalendar.vb` marker is the assembler's own provenance comment.
 
-- [ ] **Step 4: Confirm nothing was hoisted and no name collides**
+- [x] **Step 4: Confirm nothing was hoisted and no name collides**
 
 Check the stacker's own report from Step 2's output:
 
@@ -898,7 +898,22 @@ $stack = 'C:\Users\p4bn\Documents\SecuritasAutomation\Securitas-Invoice-Tracker_
 
 Expected: `Definitions = 1` for every name. Any 2 is a collision with existing tenant code and must be resolved by renaming the new function (core is the newcomer here, so core yields).
 
-- [ ] **Step 5: Assert against the assembled stack, in a document module**
+- [x] **Step 5 (REPLACED): Assert against `Header.vb` + `FiscalCalendar.vb` in `ThisWorkbook`, via `tests/Test-DocumentModule.ps1`**
+
+Automated in place of the manual-paste-plus-MCP steps below (which are kept for reference).
+See `tests/Test-DocumentModule.ps1`: a second PowerShell/COM script, run in its own hidden
+Excel instance, that injects `Header.vb` (Securitas variant, comment-only) then
+`FiscalCalendar.vb` into `ThisWorkbook` -- the same order and the same document-module kind
+`Stack-VBFiles.ps1` targets in production -- and calls each of the 12 public functions as a
+COM method on the workbook object (`$wb.FiscalYearWeeks(2026)`), never `Application.Run`,
+since `Application.Run` discards a document-module `Function`'s return value. All 15
+assertions passed, including the fiscal-September-in-calendar-August case
+(`FiscalWeekOf(2026-09-27) = 35`, `FiscalMonthOf(2026-08-30) = 8`). This is the compile check:
+calling all 12 functions forces lazy compilation across the whole module, and no class-module
+violation (`Public Const`, a public fixed-size array, a fixed-length string, `Declare`)
+surfaced.
+
+Original steps, not executed as written (manual workbook paste, Excel MCP `run_macro`):
 
 Everything up to here tested `FiscalCalendar.vb` injected into a **standard** module. Production is `ThisWorkbook`, a **document** module, which forbids `Public Const`, public fixed-size arrays, fixed-length strings and `Declare`. This module was written to avoid all of those — but "was written to" is not "was verified to".
 
@@ -918,7 +933,7 @@ The last two are the ones worth the trouble: fiscal September starting in calend
 
 If a date argument fails to marshal, pass the Excel serial number instead — the date-parsing path is already covered by the PowerShell suite, so this table only needs to prove the module works *here*.
 
-- [ ] **Step 6: Restore the stack file**
+- [x] **Step 6: Restore the stack file**
 
 Step 2 overwrote a tracked build artifact. Leave the repo as it was found — this plan's deliverable is core's module, not a regenerated Securitas artifact.
 
@@ -930,7 +945,7 @@ git status --short
 
 Expected: clean, or at least no modification to the megastack.
 
-- [ ] **Step 7: Commit the verification note**
+- [x] **Step 7: Commit the verification note**
 
 No source changed, so commit the ticked plan and record what was proven.
 

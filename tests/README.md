@@ -49,3 +49,29 @@ A test must never call a VBA procedure that will `Err.Raise`. An unhandled VBA e
 `Application.Run` opens a modal End/Debug dialog; in the harness's hidden Excel instance nothing
 can dismiss it, the COM call blocks forever, and the dialog can surface in the user's own Excel
 session. Guard clauses are verified by code review, not by this suite.
+
+## Two layers: standard module vs. document module
+
+There are two scripts here for a reason, not by accident:
+
+- **`Test-FiscalCalendar.ps1`** injects `FiscalCalendar.vb` into a **standard** module and calls
+  its functions with `Application.Run`. This is where the calendar logic itself is tested --
+  fiscal year boundaries, week counts, month starts -- against the fixture. A standard module
+  is a deliberate simplification: it allows things a document module forbids (`Public Const`,
+  public fixed-size arrays, fixed-length strings, `Declare`), and `Application.Run` only works
+  at all because a standard module resolves unqualified names.
+
+- **`Test-DocumentModule.ps1`** injects `Header.vb` then `FiscalCalendar.vb` into `ThisWorkbook`,
+  a **document (class) module** -- the same kind of module, and the same injection order, that
+  `Stack-VBFiles.ps1` pins in every tenant's real assembled stack. Production code lives in a
+  document module, never a standard one, so this is the only script that exercises the
+  restrictions that actually apply in production. It calls functions as COM methods on the
+  workbook object (`$wb.FiscalYearWeeks(2026)`) rather than `Application.Run`, because
+  `Application.Run` discards a document-module `Function`'s return value -- there would be
+  nothing to assert against otherwise. Each call also forces lazy compilation of the module up
+  to that point, so working through all 12 public functions is itself the compile check: a
+  module can pass every assertion in `Test-FiscalCalendar.ps1` and still fail to compile here.
+
+Neither script substitutes for the other. `Test-FiscalCalendar.ps1` proves the logic is correct;
+`Test-DocumentModule.ps1` proves that same code still compiles and returns correct values once it
+is a document-module member, which is the only place the class-module restrictions apply.
