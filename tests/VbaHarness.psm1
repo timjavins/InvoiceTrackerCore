@@ -7,7 +7,18 @@
 Set-StrictMode -Version Latest
 
 function New-VbaHost {
-    param([Parameter(Mandatory)][string[]] $SourceFiles)
+    param(
+        [Parameter(Mandatory)][string[]] $SourceFiles,
+
+        # Injects into ThisWorkbook (a document/class module) instead of adding a standard
+        # module. A standard module lets Application.Run resolve an unqualified name, which is
+        # why Invoke-VbaFunction and the 640-assertion suite depend on the default (unset)
+        # path. ThisWorkbook always exists on a workbook and forbids what a standard module
+        # allows (Public Const, public fixed-size arrays, fixed-length strings, Declare), so it
+        # must be looked up rather than Added -- and its procedures are reachable only as COM
+        # methods on the workbook object ($wb.Func(...)), not through Application.Run.
+        [switch] $DocumentModule
+    )
 
     # Validate every source path BEFORE any COM object exists. Nothing can leak a hidden
     # Excel process if nothing was created yet -- and this validation is the one most likely
@@ -44,9 +55,13 @@ function New-VbaHost {
                   "then re-run. Excel said: $($_.Exception.Message)"
         }
 
-        # 1 = vbext_ct_StdModule. A standard module (not ThisWorkbook) so Application.Run
-        # resolves unqualified names -- a class module would require 'ThisWorkbook.Proc'.
-        $module = $project.VBComponents.Add(1)
+        if ($DocumentModule) {
+            $module = $project.VBComponents('ThisWorkbook')
+        } else {
+            # 1 = vbext_ct_StdModule. A standard module (not ThisWorkbook) so Application.Run
+            # resolves unqualified names -- a class module would require 'ThisWorkbook.Proc'.
+            $module = $project.VBComponents.Add(1)
+        }
 
         foreach ($file in $SourceFiles) {
             $source = Get-Content -LiteralPath $file -Raw -Encoding UTF8
