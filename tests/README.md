@@ -9,6 +9,7 @@ Run them:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File tests\Test-FiscalCalendar.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File tests\Test-DocumentModule.ps1
 ```
 
 Each script exits 0 on all-pass, 1 on any failure, so they are CI-usable as-is.
@@ -23,9 +24,10 @@ Each script exits 0 on all-pass, 1 on any failure, so they are CI-usable as-is.
 
 It never attaches to a running Excel instance and never opens a workbook you have open. Each run
 creates its own hidden `Excel.Application`, adds an empty workbook, injects the modules under test
-as a **standard** module, calls functions with `Application.Run`, then closes without saving. The
-workbook only ever exists in memory -- nothing calls `SaveAs` -- so there is no temp file on disk
-to clean up.
+as a **standard** module (or, for `Test-DocumentModule.ps1`, into `ThisWorkbook` -- see below),
+calls functions with `Application.Run` (or as COM methods on the workbook object, for the
+document-module case), then closes without saving. The workbook only ever exists in memory --
+nothing calls `SaveAs` -- so there is no temp file on disk to clean up.
 
 The standard module is a deliberate simplification with a real cost. `Application.Run` cannot
 resolve an unqualified name in a document module, and even when qualified as `ThisWorkbook.Proc` it
@@ -34,9 +36,12 @@ impossible there. A standard module sidesteps both.
 
 The cost is that a standard module allows things a document module forbids: `Public Const`, public
 fixed-size arrays, fixed-length strings, `Declare`. **A module can pass every test here and still
-fail to compile in the real stack.** That gap is closed separately, by compiling the assembled stack
-in a scratch workbook and asserting against it through the Excel MCP, whose `run_macro` does return
-values from document-module functions. Both layers are needed; neither substitutes for the other.
+fail to compile in the real stack.** That gap is closed separately, by `Test-DocumentModule.ps1`
+(below), which injects the module under test into `ThisWorkbook` -- a document module, same as
+production -- over the same PowerShell/COM harness. Injecting an assembled tenant stack instead was
+considered and rejected: Securitas's stack declares variables typed as its UserForms, which are
+bound at compile time and cannot compile in a bare scratch workbook. Both layers are needed; neither
+substitutes for the other.
 
 `CodeModule.AddFromString` does not validate VBA syntax -- it accepts the text unconditionally, and
 a syntax error only surfaces later, as a confusing COM error at the first `Application.Run`. If a
@@ -61,11 +66,13 @@ There are two scripts here for a reason, not by accident:
   public fixed-size arrays, fixed-length strings, `Declare`), and `Application.Run` only works
   at all because a standard module resolves unqualified names.
 
-- **`Test-DocumentModule.ps1`** injects `Header.vb` then `FiscalCalendar.vb` into `ThisWorkbook`,
-  a **document (class) module** -- the same kind of module, and the same injection order, that
-  `Stack-VBFiles.ps1` pins in every tenant's real assembled stack. Production code lives in a
-  document module, never a standard one, so this is the only script that exercises the
-  restrictions that actually apply in production. It calls functions as COM methods on the
+- **`Test-DocumentModule.ps1`** injects `FiscalCalendar.vb` into `ThisWorkbook`, a **document
+  (class) module** -- the same kind of module `Stack-VBFiles.ps1` pins it into in every tenant's
+  real assembled stack. Production code lives in a document module, never a standard one, so
+  this is the only script that exercises the restrictions that actually apply in production. It
+  does not also inject `Header.vb`: that module is comment-only in the Securitas tenant and has
+  no declarations, so it would prove nothing here, and it would make this script depend on a
+  sibling repo checkout that will not exist everywhere it runs. It calls functions as COM methods on the
   workbook object (`$wb.FiscalYearWeeks(2026)`) rather than `Application.Run`, because
   `Application.Run` discards a document-module `Function`'s return value -- there would be
   nothing to assert against otherwise. Each call also forces lazy compilation of the module up

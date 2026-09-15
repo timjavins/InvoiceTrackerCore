@@ -163,6 +163,37 @@ both tenants classify identically. It classifies from `TryResolveSiteRequester`'
 never from its `reason` prose — otherwise rewording a warning would silently change the
 classification.
 
+## The fiscal calendar
+
+`FiscalCalendar.vb` computes Nordstrom's 4-5-4 retail fiscal calendar -- fiscal year
+boundaries, week counts, month starts, and the reverse lookups from a date to its fiscal
+year/week/month. It is pure computation: no worksheet, no workbook, no file, no network. That
+matters because the calendar used to be looked up in a Finance-owned SharePoint workbook, which
+meant every consumer inherited that file's availability and layout. This module instead derives
+the whole calendar from one anchor rule -- fiscal year N ends on the Saturday closest to 31
+January of year N+1 -- plus a repeating 4,5,4 week cycle per quarter, so nothing at run time
+needs to read anything.
+
+The rule is verified, not assumed: it reproduces all 46 published years, FY2005-FY2050, exactly,
+checked against `fiscal-calendar-fixture.csv`. That fixture is a **test oracle, never a runtime
+input** -- the module never reads it outside the test suite, so a missing or corrupted fixture
+file cannot break a workbook in production, only weaken the tests that guard this module's next
+change.
+
+Run the two test suites from the repo root:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File tests\Test-FiscalCalendar.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File tests\Test-DocumentModule.ps1
+```
+
+The first asserts the calendar logic itself against the fixture, injected into a throwaway
+standard module. The second re-injects the same module into `ThisWorkbook`, a document (class)
+module -- the kind every tenant stack actually pastes it into -- because a document module
+forbids things a standard module allows, and this module could otherwise pass every logic
+assertion and still fail to compile in production. See `tests/README.md` for why there are two
+scripts and what each one does and does not prove.
+
 ## Design docs
 
 Architecture decisions and the domain glossary live in `SecuritasAutomation`:

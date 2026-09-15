@@ -16,7 +16,10 @@
 ' February directly.
 '
 ' Verified against tests/../fiscal-calendar-fixture.csv (FY2005-FY2050) by
-' tests/Test-FiscalCalendar.ps1. See ADR and the design doc referenced in that plan.
+' tests/Test-FiscalCalendar.ps1. See the design doc at
+' ../NordGuardsTracker/docs/superpowers/specs/2026-09-11-po-key-and-core-adoption-design.md,
+' and the sibling ../4-5-4-calculator/ folder, which holds the language-agnostic rule
+' statement and the same fixture.
 '
 ' Fiscal month indexes are 1-12 where 1 = February and 12 = January, because that is the order
 ' the fiscal year runs in. Callers wanting a calendar month name must map it themselves.
@@ -28,7 +31,7 @@ End Function
 
 ' The Saturday nearest a given date. Ties cannot occur: a date is at most 3 days from one
 ' Saturday and at least 4 from the other, so "forward if 3 or fewer, else back" is total.
-Public Function SaturdayClosestTo(ByVal anchor As Date) As Date
+Public Function FiscalSaturdayClosestTo(ByVal anchor As Date) As Date
     Dim dow As Long
     dow = Weekday(anchor, vbSunday)      ' 1 = Sunday ... 7 = Saturday
 
@@ -36,15 +39,22 @@ Public Function SaturdayClosestTo(ByVal anchor As Date) As Date
     forwardDays = 7 - dow                ' 0 when anchor is already Saturday
 
     If forwardDays <= 3 Then
-        SaturdayClosestTo = anchor + forwardDays
+        FiscalSaturdayClosestTo = anchor + forwardDays
     Else
-        SaturdayClosestTo = anchor - dow ' the previous Saturday
+        FiscalSaturdayClosestTo = anchor - dow ' the previous Saturday
     End If
 End Function
 
 ' Last day of the fiscal year: the Saturday closest to 31 January of the FOLLOWING calendar year.
 Public Function FiscalYearEnd(ByVal fiscalYear As Long) As Date
-    FiscalYearEnd = SaturdayClosestTo(DateSerial(fiscalYear + 1, 1, 31))
+    If fiscalYear < 1000 Or fiscalYear > 9998 Then
+        Err.Raise 5, "FiscalYearEnd", _
+            "fiscalYear must be a full four-digit year (1000-9998); got " & fiscalYear & ". " & _
+            "DateSerial remaps two-digit years by a machine setting, so a value like 25 would " & _
+            "silently produce FY2025's answer and 50 would be wrong by 75 years."
+    End If
+
+    FiscalYearEnd = FiscalSaturdayClosestTo(DateSerial(fiscalYear + 1, 1, 31))
 End Function
 
 ' First day of the fiscal year -- the Sunday after the previous year ended. Derived from the
@@ -62,8 +72,8 @@ End Function
 ' consecutive sixes), so anything counting years since the last long one is wrong twice this century.
 Public Function FiscalYearWeeks(ByVal fiscalYear As Long) As Long
     Dim spanDays As Long
-    spanDays = CLng(FiscalYearEnd(fiscalYear) - FiscalYearEnd(fiscalYear - 1))
     ' CLng rounds rather than truncates; this is safe only because FiscalYearEnd returns DateSerial values with no time component.
+    spanDays = CLng(FiscalYearEnd(fiscalYear) - FiscalYearEnd(fiscalYear - 1))
     FiscalYearWeeks = spanDays \ 7
 End Function
 
@@ -92,7 +102,9 @@ Public Function FiscalMonthWeeks(ByVal fiscalYear As Long, ByVal fiscalMonth As 
     FiscalMonthWeeks = weeks
 End Function
 
-' First day (a Sunday) of a fiscal month.
+' First day (a Sunday) of a fiscal month. Accumulates FiscalMonthWeeks for every month before
+' this one rather than using a fixed 4/5/4 offset table, which is exactly why it stays correct
+' in a 53-week year: the extra week automatically pushes every later month start out by 7 days.
 Public Function FiscalMonthStart(ByVal fiscalYear As Long, ByVal fiscalMonth As Long) As Date
     If fiscalMonth < 1 Or fiscalMonth > 12 Then
         Err.Raise 5, "FiscalMonthStart", _

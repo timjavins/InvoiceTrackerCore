@@ -35,15 +35,23 @@ Every later task depends on this, and it is the one piece a reviewer could rejec
 **Interfaces:**
 - Consumes: nothing.
 - Produces:
-  - `New-VbaHost -SourceFiles <string[]>` → `[hashtable]` with keys `Excel` (Application), `Workbook`, `Run` (a `[scriptblock]`-free helper is not used; call `$host.Excel.Run(...)` directly), `TempPath`.
-  - `Invoke-VbaFunction -Host <hashtable> -Name <string> -Args <object[]>` → the function's return value.
-  - `Remove-VbaHost -Host <hashtable>` → `$null`; closes the workbook without saving, quits Excel, releases COM, deletes the temp file.
+  - `New-VbaHost -SourceFiles <string[]> [-DocumentModule]` → `[hashtable]` with keys `Excel`
+    (Application), `Workbook`, `DocumentModule` (bool, records which mode built this host).
+  - `Invoke-VbaFunction -VbaHost <hashtable> -Name <string> -Arguments <object[]>` → the
+    function's return value; throws a clear message if `VbaHost.DocumentModule` is set, since
+    a document-module procedure must be called as a COM method on the workbook object instead.
+  - `Remove-VbaHost -VbaHost <hashtable>` → `$null`; closes the workbook without saving, quits
+    Excel, releases COM. Nothing is saved to disk, so there is no temp file to delete.
   - `Import-FiscalFixture -Path <string>` → array of objects with `fiscal_year` (int), `week1_start` (DateTime), `year_end` (DateTime), `weeks` (int).
   - `Assert-Equal -Expected <object> -Actual <object> -Because <string>` → increments script-scope pass/fail counters; writes one line per failure.
 
-- [ ] **Step 1: Write the harness module**
+- [x] **Step 1: Write the harness module**
 
-Create `tests/VbaHarness.psm1`:
+Create `tests/VbaHarness.psm1`. The block below is the shipped version, not the earlier draft
+that cost two fix rounds and a re-review: that draft constructed the COM object before
+validating `$SourceFiles`, set `Visible`/`DisplayAlerts` outside the `try`, dereferenced `$wb`
+in a `catch` where it could be unset under `Set-StrictMode`, and carried a dead `TempPath` (the
+workbook is never saved, so there is nothing at that path to clean up). Copy this version:
 
 ```powershell
 # Runs VBA from InvoiceTrackerCore against a throwaway workbook in its own hidden
@@ -55,38 +63,75 @@ Create `tests/VbaHarness.psm1`:
 Set-StrictMode -Version Latest
 
 function New-VbaHost {
-    param([Parameter(Mandatory)][string[]] $SourceFiles)
+    param(
+        [Parameter(Mandatory)][string[]] $SourceFiles,
 
-    # New-Object -ComObject creates a SEPARATE instance. Never use GetActiveObject here:
-    # that would attach to the user's Excel and run test code beside live workbooks.
-    $excel = New-Object -ComObject Excel.Application
-    $excel.Visible = $false
-    $excel.DisplayAlerts = $false
+        # Injects into ThisWorkbook (a document/class module) instead of adding a standard
+        # module. A standard module lets Application.Run resolve an unqualified name, which is
+        # why Invoke-VbaFunction and the 640-assertion suite depend on the default (unset)
+        # path. ThisWorkbook always exists on a workbook and forbids what a standard module
+        # allows (Public Const, public fixed-size arrays, fixed-length strings, Declare), so it
+        # must be looked up rather than Added -- and its procedures are reachable only as COM
+        # methods on the workbook object ($wb.Func(...)), not through Application.Run.
+        [switch] $DocumentModule
+    )
 
-    $wb = $excel.Workbooks.Add()
-
-    try {
-        $project = $wb.VBProject
-    } catch {
-        $excel.Quit()
-        throw "Cannot reach the VBA project. Enable Excel > File > Options > Trust Center > " +
-              "Trust Center Settings > Macro Settings > 'Trust access to the VBA project object model', " +
-              "then re-run. Excel said: $($_.Exception.Message)"
-    }
-
-    # 1 = vbext_ct_StdModule. A standard module (not ThisWorkbook) so Application.Run
-    # resolves unqualified names -- a class module would require 'ThisWorkbook.Proc'.
-    $module = $project.VBComponents.Add(1)
-
+    # Validate every source path BEFORE any COM object exists. Nothing can leak a hidden
+    # Excel process if nothing was created yet -- and this validation is the one most likely
+    # to fail (a typo'd path, a task run before its .vb file exists), so it must not need
+    # cleanup at all. Do not move this below New-Object "for tidiness": that reintroduces the
+    # leak this check exists to prevent.
     foreach ($file in $SourceFiles) {
         if (-not (Test-Path -LiteralPath $file)) { throw "Source file not found: $file" }
-        $source = Get-Content -LiteralPath $file -Raw -Encoding UTF8
-        $module.CodeModule.AddFromString($source)
     }
 
-    $temp = Join-Path $env:TEMP ("vbatest_{0}.xlsm" -f [guid]::NewGuid().ToString('N'))
+    # Initialise both to $null before the try so the catch's cleanup can safely test for
+    # either one -- under Set-StrictMode, referencing an unset variable throws, which would
+    # otherwise mask the real error with an unrelated "variable has not been set" failure.
+    $excel = $null
+    $wb = $null
 
-    @{ Excel = $excel; Workbook = $wb; TempPath = $temp }
+    try {
+        # New-Object -ComObject creates a SEPARATE instance. Never use GetActiveObject here:
+        # that would attach to the user's Excel and run test code beside live workbooks.
+        # This whole block -- construction, property assignment, workbook creation, VBProject
+        # access, module injection -- is inside one try so nothing between "Excel exists" and
+        # "the host is fully built" can leak a hidden process on failure.
+        $excel = New-Object -ComObject Excel.Application
+        $excel.Visible = $false
+        $excel.DisplayAlerts = $false
+
+        $wb = $excel.Workbooks.Add()
+
+        try {
+            $project = $wb.VBProject
+        } catch {
+            throw "Cannot reach the VBA project. Enable Excel > File > Options > Trust Center > " +
+                  "Trust Center Settings > Macro Settings > 'Trust access to the VBA project object model', " +
+                  "then re-run. Excel said: $($_.Exception.Message)"
+        }
+
+        if ($DocumentModule) {
+            $module = $project.VBComponents('ThisWorkbook')
+        } else {
+            # 1 = vbext_ct_StdModule. A standard module (not ThisWorkbook) so Application.Run
+            # resolves unqualified names -- a class module would require 'ThisWorkbook.Proc'.
+            $module = $project.VBComponents.Add(1)
+        }
+
+        foreach ($file in $SourceFiles) {
+            $source = Get-Content -LiteralPath $file -Raw -Encoding UTF8
+            $module.CodeModule.AddFromString($source)
+        }
+    } catch {
+        if ($excel) { try { $excel.Quit() } catch { } }
+        foreach ($obj in $wb, $excel) {
+            if ($obj) { try { [void][Runtime.InteropServices.Marshal]::ReleaseComObject($obj) } catch { } }
+        }
+        throw
+    }
+
+    @{ Excel = $excel; Workbook = $wb; DocumentModule = [bool]$DocumentModule }
 }
 
 function Invoke-VbaFunction {
@@ -95,6 +140,20 @@ function Invoke-VbaFunction {
         [Parameter(Mandatory)][string] $Name,
         [object[]] $Arguments = @()
     )
+
+    # A document-module host's procedures are members of the workbook COM object, not
+    # names Application.Run can resolve: unqualified, Run cannot see into ThisWorkbook at
+    # all, and even qualified as 'ThisWorkbook.Proc' it executes the procedure but discards
+    # a Function's return value -- so this would either error opaquely or silently return
+    # $null. Callers against a -DocumentModule host must call the workbook object directly,
+    # e.g. $VbaHost.Workbook.FiscalYearWeeks(2026).
+    if ($VbaHost.DocumentModule) {
+        throw "Invoke-VbaFunction cannot call '$Name' on a -DocumentModule host: " +
+              "Application.Run cannot resolve an unqualified name in a document module, and " +
+              "even qualified it discards a Function's return value. Call it as a COM method " +
+              "on the workbook object instead, e.g. `$VbaHost.Workbook.$Name(...)."
+    }
+
     switch ($Arguments.Count) {
         0 { $VbaHost.Excel.Run($Name) }
         1 { $VbaHost.Excel.Run($Name, $Arguments[0]) }
@@ -112,9 +171,6 @@ function Remove-VbaHost {
         if ($VbaHost[$key]) {
             try { [void][Runtime.InteropServices.Marshal]::ReleaseComObject($VbaHost[$key]) } catch { }
         }
-    }
-    if ($VbaHost.TempPath -and (Test-Path -LiteralPath $VbaHost.TempPath)) {
-        Remove-Item -LiteralPath $VbaHost.TempPath -Force -ErrorAction SilentlyContinue
     }
     [GC]::Collect()
     $null
@@ -173,7 +229,7 @@ Export-ModuleMember -Function New-VbaHost, Invoke-VbaFunction, Remove-VbaHost,
                               Write-AssertSummary
 ```
 
-- [ ] **Step 2: Write the smoke test that proves the harness works**
+- [x] **Step 2: Write the smoke test that proves the harness works**
 
 Create `tests/Test-FiscalCalendar.ps1`. At this stage it only proves injection and invocation work — calendar assertions arrive in Task 2.
 
@@ -199,7 +255,7 @@ try {
 Write-AssertSummary
 ```
 
-- [ ] **Step 3: Run the test to verify it fails**
+- [x] **Step 3: Run the test to verify it fails**
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File tests\Test-FiscalCalendar.ps1
@@ -207,7 +263,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tests\Test-FiscalCalendar.ps
 
 Expected: throws `Source file not found: ...\FiscalCalendar.vb`. That is the correct first failure — the module does not exist yet.
 
-- [ ] **Step 4: Create the module with only the self-check**
+- [x] **Step 4: Create the module with only the self-check**
 
 Create `FiscalCalendar.vb` in the repo root:
 
@@ -241,7 +297,7 @@ Public Function FiscalCalendarSelfCheck() As String
 End Function
 ```
 
-- [ ] **Step 5: Run the test to verify it passes**
+- [x] **Step 5: Run the test to verify it passes**
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File tests\Test-FiscalCalendar.ps1
@@ -251,7 +307,7 @@ Expected: `passed: 1  failed: 0` then `ALL PASS`.
 
 If it instead throws about the VBA project, VBOM trust is off — enable it as the error text describes and re-run. Do not proceed until this passes; every later task uses this harness.
 
-- [ ] **Step 6: Document how to run the tests**
+- [x] **Step 6: Document how to run the tests**
 
 Create `tests/README.md`:
 
@@ -296,7 +352,7 @@ in a scratch workbook and asserting against it through the Excel MCP, whose `run
 values from document-module functions. Both layers are needed; neither substitutes for the other.
 ```
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add tests/VbaHarness.psm1 tests/Test-FiscalCalendar.ps1 tests/README.md FiscalCalendar.vb
@@ -326,7 +382,7 @@ unqualified names, and cleans up its temp workbook."
   - `FiscalYearStart(ByVal fiscalYear As Long) As Date`
   - `SaturdayClosestTo(ByVal anchor As Date) As Date` (Public — it is independently useful and independently testable)
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Replace the smoke assertion block in `tests/Test-FiscalCalendar.ps1` (keep the surrounding scaffolding) with:
 
@@ -373,7 +429,7 @@ try {
 }
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File tests\Test-FiscalCalendar.ps1
@@ -381,7 +437,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tests\Test-FiscalCalendar.ps
 
 Expected: a COM error naming `FiscalYearEnd` as unavailable — the function does not exist yet.
 
-- [ ] **Step 3: Implement the year boundary functions**
+- [x] **Step 3: Implement the year boundary functions**
 
 Append to `FiscalCalendar.vb`:
 
@@ -415,7 +471,7 @@ Public Function FiscalYearStart(ByVal fiscalYear As Long) As Date
 End Function
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File tests\Test-FiscalCalendar.ps1
@@ -423,7 +479,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tests\Test-FiscalCalendar.ps
 
 Expected: `passed: 231  failed: 0` — 46 years × 4 assertions, plus 1 smoke, plus 3 anchor cases, then `ALL PASS`. If the count differs but failures are 0, recount rather than assuming; a silently skipped fixture row is a real bug in the test.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add FiscalCalendar.vb tests/Test-FiscalCalendar.ps1
@@ -449,7 +505,7 @@ as well as the date -- a rule that is off by one day still matches on some years
 - Consumes: `FiscalYearEnd` (Task 2).
 - Produces: `FiscalYearWeeks(ByVal fiscalYear As Long) As Long` — returns 52 or 53.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Insert inside the `foreach ($row in $fixture)` loop in `tests/Test-FiscalCalendar.ps1`:
 
@@ -470,7 +526,7 @@ And after the loop, assert the 53-week set explicitly. This is belt-and-braces o
                  -Because '53-week years are exactly the eight known ones'
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File tests\Test-FiscalCalendar.ps1
@@ -478,7 +534,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tests\Test-FiscalCalendar.ps
 
 Expected: a COM error naming `FiscalYearWeeks` as unavailable.
 
-- [ ] **Step 3: Implement `FiscalYearWeeks`**
+- [x] **Step 3: Implement `FiscalYearWeeks`**
 
 Append to `FiscalCalendar.vb`:
 
@@ -496,7 +552,7 @@ Public Function FiscalYearWeeks(ByVal fiscalYear As Long) As Long
 End Function
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File tests\Test-FiscalCalendar.ps1
@@ -504,7 +560,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tests\Test-FiscalCalendar.ps
 
 Expected: `passed: 278  failed: 0` (231 from Task 2, plus 46 week counts, plus the 53-week set assertion), then `ALL PASS`.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add FiscalCalendar.vb tests/Test-FiscalCalendar.ps1
@@ -533,7 +589,7 @@ counting years since the last long one breaks twice this century."
   - `FiscalMonthStart(ByVal fiscalYear As Long, ByVal fiscalMonth As Long) As Date`
   - `FiscalWeekStart(ByVal fiscalYear As Long, ByVal weekNumber As Long) As Date`
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Append inside the `try` block of `tests/Test-FiscalCalendar.ps1`, after the fixture loop:
 
@@ -578,7 +634,7 @@ Append inside the `try` block of `tests/Test-FiscalCalendar.ps1`, after the fixt
 
 Note on the September figure: FY2026's fiscal September starts **2026-08-30**, which is exactly the sort of month boundary that makes this module worth having.
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File tests\Test-FiscalCalendar.ps1
@@ -586,7 +642,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tests\Test-FiscalCalendar.ps
 
 Expected: a COM error naming `FiscalMonthWeeks` as unavailable.
 
-- [ ] **Step 3: Implement the month and week functions**
+- [x] **Step 3: Implement the month and week functions**
 
 Append to `FiscalCalendar.vb`:
 
@@ -648,7 +704,7 @@ Public Function FiscalWeekStart(ByVal fiscalYear As Long, ByVal weekNumber As Lo
 End Function
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File tests\Test-FiscalCalendar.ps1
@@ -656,7 +712,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tests\Test-FiscalCalendar.ps
 
 Expected: `passed: 356  failed: 0` (278 from Task 3, plus 12 + 12 month counts, plus 46 sum checks, plus 5 month starts, plus 3 week starts), then `ALL PASS`.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add FiscalCalendar.vb tests/Test-FiscalCalendar.ps1
@@ -687,7 +743,7 @@ Out-of-range month or week numbers raise rather than return a guessed date."
   - `FiscalMonthOf(ByVal d As Date) As Long` — 1-12, 1 = February.
   - `FiscalWeekStartOf(ByVal d As Date) As Date` — the Sunday beginning the fiscal week containing `d`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Append inside the `try` block of `tests/Test-FiscalCalendar.ps1`:
 
@@ -726,7 +782,7 @@ Append inside the `try` block of `tests/Test-FiscalCalendar.ps1`:
     }
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File tests\Test-FiscalCalendar.ps1
@@ -734,7 +790,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tests\Test-FiscalCalendar.ps
 
 Expected: a COM error naming `FiscalYearOf` as unavailable.
 
-- [ ] **Step 3: Implement the reverse lookups**
+- [x] **Step 3: Implement the reverse lookups**
 
 Append to `FiscalCalendar.vb`:
 
@@ -801,7 +857,7 @@ Public Function FiscalMonthOf(ByVal d As Date) As Long
 End Function
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File tests\Test-FiscalCalendar.ps1
@@ -811,7 +867,7 @@ Expected: `passed: 668  failed: 0` (356 from Task 4, plus 46 × 6 round-trip ass
 
 Recount if the total differs with zero failures — a skipped loop is a silent hole.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add FiscalCalendar.vb tests/Test-FiscalCalendar.ps1
@@ -870,13 +926,23 @@ Expected: completes without throwing, and its output mentions `FiscalCalendar.vb
 
 - [x] **Step 3: Confirm the module landed in the output**
 
+The assembler's `===== from FiscalCalendar.vb =====` provenance marker only appears for modules
+whose declarations were hoisted. This module has none by design (see the Global Constraints), so
+that marker never appears for it and grepping for it cannot match — verified: the assembled
+Securitas stack contains 6 such markers, none for `FiscalCalendar.vb`. Check for the module's
+actual content instead — its 12 public function names, each present exactly once:
+
 ```powershell
-Select-String -Path 'C:\Users\p4bn\Documents\SecuritasAutomation\Securitas-Invoice-Tracker_MegaStack.vb' `
-              -Pattern 'from FiscalCalendar\.vb', 'Public Function FiscalYearEnd' |
-    Select-Object LineNumber, Line
+$stack = 'C:\Users\p4bn\Documents\SecuritasAutomation\Securitas-Invoice-Tracker_MegaStack.vb'
+'FiscalYearEnd','FiscalYearStart','FiscalYearWeeks','FiscalMonthWeeks','FiscalMonthStart',
+'FiscalWeekStart','FiscalYearOf','FiscalWeekOf','FiscalMonthOf','FiscalWeekStartOf',
+'FiscalSaturdayClosestTo','FiscalCalendarSelfCheck' | ForEach-Object {
+    $n = ([regex]::Matches((Get-Content $stack -Raw), "(?m)^(Public\s+)?Function\s+$_\b")).Count
+    [pscustomobject]@{ Name = $_; Definitions = $n }
+} | Format-Table -AutoSize
 ```
 
-Expected: both patterns found. The `from FiscalCalendar.vb` marker is the assembler's own provenance comment.
+Expected: `Definitions = 1` for all 12 names.
 
 - [x] **Step 4: Confirm nothing was hoisted and no name collides**
 
@@ -884,19 +950,7 @@ Check the stacker's own report from Step 2's output:
 
 - `FiscalCalendar.vb` must **not** appear in any "hoisted declarations from" list. It has no module-level declarations by design; if it is listed, something was added that should not have been.
 - No duplicate-filename throw occurred (Step 2 would have failed).
-- The stacker does **not** check for duplicate *procedure* names — that only surfaces on compile in the VBE. So grep for the exported names appearing more than once:
-
-```powershell
-$stack = 'C:\Users\p4bn\Documents\SecuritasAutomation\Securitas-Invoice-Tracker_MegaStack.vb'
-'FiscalYearEnd','FiscalYearStart','FiscalYearWeeks','FiscalMonthWeeks','FiscalMonthStart',
-'FiscalWeekStart','FiscalYearOf','FiscalWeekOf','FiscalMonthOf','FiscalWeekStartOf',
-'SaturdayClosestTo','FiscalCalendarSelfCheck' | ForEach-Object {
-    $n = ([regex]::Matches((Get-Content $stack -Raw), "(?m)^(Public\s+)?Function\s+$_\b")).Count
-    [pscustomobject]@{ Name = $_; Definitions = $n }
-} | Format-Table -AutoSize
-```
-
-Expected: `Definitions = 1` for every name. Any 2 is a collision with existing tenant code and must be resolved by renaming the new function (core is the newcomer here, so core yields).
+- The stacker does **not** check for duplicate *procedure* names — that only surfaces on compile in the VBE. Step 3's per-name count already covers this: `Definitions = 1` for every one of the 12 names means none collides with existing tenant code. Any 2 would be a collision to resolve by renaming the new function (core is the newcomer here, so core yields).
 
 - [x] **Step 5 (REPLACED): Assert against `Header.vb` + `FiscalCalendar.vb` in `ThisWorkbook`, via `tests/Test-DocumentModule.ps1`**
 
@@ -933,17 +987,12 @@ The last two are the ones worth the trouble: fiscal September starting in calend
 
 If a date argument fails to marshal, pass the Excel serial number instead — the date-parsing path is already covered by the PowerShell suite, so this table only needs to prove the module works *here*.
 
-- [x] **Step 6: Restore the stack file**
+- [x] **Step 6: The stack file needs no restoring**
 
-Step 2 overwrote a tracked build artifact. Leave the repo as it was found — this plan's deliverable is core's module, not a regenerated Securitas artifact.
-
-```powershell
-cd C:\Users\p4bn\Documents\SecuritasAutomation
-git checkout -- Securitas-Invoice-Tracker_MegaStack.vb
-git status --short
-```
-
-Expected: clean, or at least no modification to the megastack.
+`Securitas-Invoice-Tracker_MegaStack.vb` is a build artifact, not a tracked file: Securitas's
+`.gitignore` carries `*MegaStack*.vb`. Step 2's overwrite is generated scratch output, so
+`git checkout -- Securitas-Invoice-Tracker_MegaStack.vb` has nothing to restore and errors
+"unknown pathspec" if run. There is nothing to do here — the overwrite is harmless.
 
 - [x] **Step 7: Commit the verification note**
 
@@ -953,15 +1002,17 @@ No source changed, so commit the ticked plan and record what was proven.
 git add docs/superpowers/plans/2026-09-11-fiscal-calendar.md
 git commit -m "docs: confirm FiscalCalendar stacks and runs inside a document module
 
-Stacked against SecuritasAutomation: no filename collision, module present in the
-output with its provenance marker, no declarations hoisted, and every exported
-procedure name defined exactly once. The stacker does not check for duplicate
-procedure names, so that last check was done by hand.
+Stacked against SecuritasAutomation: no filename collision, all 12 exported
+function names present exactly once in the assembled output, and none hoisted
+into the declarations header (this module has none by design). The stacker does
+not check for duplicate procedure names, so that last check was done by hand.
 
-Then asserted against the assembled stack pasted into ThisWorkbook of a scratch
-workbook, since the unit tests inject into a standard module and a document module
-forbids things a standard module allows. Fiscal September starting in calendar
-August is now checked in the environment the code actually runs in.
+Then asserted against Header.vb + FiscalCalendar.vb pasted into ThisWorkbook of a
+throwaway workbook, over the same PowerShell/COM harness used for the standard-
+module suite, via the new tests/Test-DocumentModule.ps1 -- not against the full
+assembled stack, which cannot compile in a bare workbook (Securitas's stack
+declares UserForm-typed variables). All 15 assertions passed, including fiscal
+September starting in calendar August, which is the case this module exists for.
 
 Noted for future automation: Stack-VBFiles.ps1 ends in a bare Read-Host, so a
 scripted caller must redirect stdin (< NUL) or it hangs."
