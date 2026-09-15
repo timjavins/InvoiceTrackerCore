@@ -25,59 +25,15 @@ Reset-AssertCounters
 
 $headerPath  = Join-Path $repo '..\SecuritasAutomation\Header.vb'
 $fiscalPath  = Join-Path $repo 'FiscalCalendar.vb'
-$sourceFiles = @($headerPath, $fiscalPath)
 
-# Validate every source path BEFORE any COM object exists, same reasoning as
-# VbaHarness.psm1's New-VbaHost: nothing can leak a hidden process on a typo'd path if
-# nothing was created yet.
-foreach ($file in $sourceFiles) {
-    if (-not (Test-Path -LiteralPath $file)) { throw "Source file not found: $file" }
-}
-
-$excel = $null
-$wb = $null
+# -DocumentModule injects into ThisWorkbook instead of adding a standard module -- see
+# VbaHarness.psm1's New-VbaHost for why that switch exists. Everything else (path validation,
+# COM lifecycle, cleanup) is shared with Test-FiscalCalendar.ps1's use of the same function.
+$vba = New-VbaHost -SourceFiles @($headerPath, $fiscalPath) -DocumentModule
 
 try {
-    # New-Object -ComObject creates a SEPARATE instance. Never use GetActiveObject here:
-    # that would attach to the user's Excel and run test code beside live workbooks.
-    $excel = New-Object -ComObject Excel.Application
-    $excel.Visible = $false
-    $excel.DisplayAlerts = $false
-
-    $wb = $excel.Workbooks.Add()
-
-    try {
-        $project = $wb.VBProject
-    } catch {
-        throw "Cannot reach the VBA project. Enable Excel > File > Options > Trust Center > " +
-              "Trust Center Settings > Macro Settings > 'Trust access to the VBA project object model', " +
-              "then re-run. Excel said: $($_.Exception.Message)"
-    }
-
-    # ThisWorkbook is a document (class) module that exists on every workbook by default --
-    # unlike VbaHarness.psm1's standard module, it is looked up, never Added. This is the
-    # injection path that differs from the standard-module harness and is the whole point
-    # of this script.
-    $thisWorkbook = $project.VBComponents('ThisWorkbook')
-
-    foreach ($file in $sourceFiles) {
-        $source = Get-Content -LiteralPath $file -Raw -Encoding UTF8
-        $thisWorkbook.CodeModule.AddFromString($source)
-    }
-} catch {
-    if ($excel) { try { $excel.Quit() } catch { } }
-    foreach ($obj in $wb, $excel) {
-        if ($obj) { try { [void][Runtime.InteropServices.Marshal]::ReleaseComObject($obj) } catch { } }
-    }
-    throw
-}
-
-# Shaped like VbaHarness.psm1's host so Remove-VbaHost can be reused as-is for cleanup.
-$vba = @{ Excel = $excel; Workbook = $wb }
-
-try {
-    # Called as a COM method on the workbook object -- e.g. $wb.FiscalYearWeeks(2026) --
-    # NOT Application.Run. Public procedures in a document module are members of that COM
+    # Called as a COM method on the workbook object -- e.g. $vba.Workbook.FiscalYearWeeks(2026)
+    # -- NOT Application.Run. Public procedures in a document module are members of that COM
     # object, and calling them this way returns their value. Application.Run executes them
     # but DISCARDS a Function's return value for a document-module procedure, which would
     # make every assertion below impossible.
@@ -86,6 +42,7 @@ try {
     # through all 12 public functions is itself the compile check this script exists for:
     # a class-module violation (Public Const, a public fixed-size array, a fixed-length
     # string, Declare) would surface here as a COM exception, not as a silent pass.
+    $wb = $vba.Workbook
 
     Assert-Equal -Expected 'ok' -Actual ($wb.FiscalCalendarSelfCheck()) `
                  -Because 'ThisWorkbook.FiscalCalendarSelfCheck compiles and runs as a document-module member'
