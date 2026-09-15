@@ -68,7 +68,7 @@ function New-VbaHost {
 
         # Injects into ThisWorkbook (a document/class module) instead of adding a standard
         # module. A standard module lets Application.Run resolve an unqualified name, which is
-        # why Invoke-VbaFunction and the 640-assertion suite depend on the default (unset)
+        # why Invoke-VbaFunction and the 643-assertion suite depend on the default (unset)
         # path. ThisWorkbook always exists on a workbook and forbids what a standard module
         # allows (Public Const, public fixed-size arrays, fixed-length strings, Declare), so it
         # must be looked up rather than Added -- and its procedures are reachable only as COM
@@ -380,7 +380,13 @@ unqualified names, and cleans up its temp workbook."
 - Produces:
   - `FiscalYearEnd(ByVal fiscalYear As Long) As Date`
   - `FiscalYearStart(ByVal fiscalYear As Long) As Date`
-  - `SaturdayClosestTo(ByVal anchor As Date) As Date` (Public — it is independently useful and independently testable)
+  - `FiscalSaturdayClosestTo(ByVal anchor As Date) As Date` (Public — it is independently useful and independently testable)
+
+> **Naming note, added after execution:** this function was originally written as
+> `SaturdayClosestTo` and renamed to `FiscalSaturdayClosestTo` in the final review wave. The
+> assembler flattens every core module into ONE namespace shared by two production workbooks with no
+> namespacing, and it was the only one of the 12 exports without the `Fiscal` prefix — the single
+> name at real collision risk. The code blocks below carry the final name, so they are safe to copy.
 
 - [x] **Step 1: Write the failing tests**
 
@@ -416,13 +422,13 @@ try {
     # The anchor helper, at both tie-break directions. 31 Jan 2026 IS a Saturday (no move);
     # 31 Jan 2027 is a Sunday (move back 1); 31 Jan 2007 is a Wednesday (move forward 3).
     Assert-Equal -Expected '2026-01-31' `
-                 -Actual (Invoke-VbaFunction -VbaHost $vba -Name 'SaturdayClosestTo' -Arguments @([datetime]'2026-01-31')) `
+                 -Actual (Invoke-VbaFunction -VbaHost $vba -Name 'FiscalSaturdayClosestTo' -Arguments @([datetime]'2026-01-31')) `
                  -Because 'anchor already on a Saturday does not move'
     Assert-Equal -Expected '2027-01-30' `
-                 -Actual (Invoke-VbaFunction -VbaHost $vba -Name 'SaturdayClosestTo' -Arguments @([datetime]'2027-01-31')) `
+                 -Actual (Invoke-VbaFunction -VbaHost $vba -Name 'FiscalSaturdayClosestTo' -Arguments @([datetime]'2027-01-31')) `
                  -Because 'anchor on a Sunday moves back one day'
     Assert-Equal -Expected '2007-02-03' `
-                 -Actual (Invoke-VbaFunction -VbaHost $vba -Name 'SaturdayClosestTo' -Arguments @([datetime]'2007-01-31')) `
+                 -Actual (Invoke-VbaFunction -VbaHost $vba -Name 'FiscalSaturdayClosestTo' -Arguments @([datetime]'2007-01-31')) `
                  -Because 'anchor on a Wednesday moves forward three days'
 } finally {
     Remove-VbaHost -VbaHost $vba | Out-Null
@@ -444,7 +450,7 @@ Append to `FiscalCalendar.vb`:
 ```vb
 ' The Saturday nearest a given date. Ties cannot occur: a date is at most 3 days from one
 ' Saturday and at least 4 from the other, so "forward if 3 or fewer, else back" is total.
-Public Function SaturdayClosestTo(ByVal anchor As Date) As Date
+Public Function FiscalSaturdayClosestTo(ByVal anchor As Date) As Date
     Dim dow As Long
     dow = Weekday(anchor, vbSunday)      ' 1 = Sunday ... 7 = Saturday
 
@@ -452,15 +458,15 @@ Public Function SaturdayClosestTo(ByVal anchor As Date) As Date
     forwardDays = 7 - dow                ' 0 when anchor is already Saturday
 
     If forwardDays <= 3 Then
-        SaturdayClosestTo = anchor + forwardDays
+        FiscalSaturdayClosestTo = anchor + forwardDays
     Else
-        SaturdayClosestTo = anchor - dow ' the previous Saturday
+        FiscalSaturdayClosestTo = anchor - dow ' the previous Saturday
     End If
 End Function
 
 ' Last day of the fiscal year: the Saturday closest to 31 January of the FOLLOWING calendar year.
 Public Function FiscalYearEnd(ByVal fiscalYear As Long) As Date
-    FiscalYearEnd = SaturdayClosestTo(DateSerial(fiscalYear + 1, 1, 31))
+    FiscalYearEnd = FiscalSaturdayClosestTo(DateSerial(fiscalYear + 1, 1, 31))
 End Function
 
 ' First day of the fiscal year -- the Sunday after the previous year ended. Derived from the
@@ -966,6 +972,14 @@ assertions passed, including the fiscal-September-in-calendar-August case
 calling all 12 functions forces lazy compilation across the whole module, and no class-module
 violation (`Public Const`, a public fixed-size array, a fixed-length string, `Declare`)
 surfaced.
+
+> **Superseded after this step ran — do not copy the `Header.vb` injection.** The final review
+> found it to be a hard dependency on a sibling repo for zero test value: that file is comment-only
+> in this tenant, so injecting it proves nothing, and `New-VbaHost`'s path validation throws wherever
+> the tenant checkout is absent — which made `tests/README.md`'s "CI-usable as-is" claim false.
+> `tests/Test-DocumentModule.ps1` now injects `FiscalCalendar.vb` alone. The description above records
+> what this step did when it ran, and the quoted commit message in Step 7 is a faithful quote of
+> commit `6db2987`; neither is a description of the current script.
 
 Original steps, not executed as written (manual workbook paste, Excel MCP `run_macro`):
 

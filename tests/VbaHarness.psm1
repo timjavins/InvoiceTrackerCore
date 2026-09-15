@@ -12,7 +12,7 @@ function New-VbaHost {
 
         # Injects into ThisWorkbook (a document/class module) instead of adding a standard
         # module. A standard module lets Application.Run resolve an unqualified name, which is
-        # why Invoke-VbaFunction and the 640-assertion suite depend on the default (unset)
+        # why Invoke-VbaFunction and the 643-assertion suite depend on the default (unset)
         # path. ThisWorkbook always exists on a workbook and forbids what a standard module
         # allows (Public Const, public fixed-size arrays, fixed-length strings, Declare), so it
         # must be looked up rather than Added -- and its procedures are reachable only as COM
