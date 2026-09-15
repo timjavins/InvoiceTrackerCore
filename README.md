@@ -204,3 +204,8 @@ Architecture decisions and the domain glossary live in `SecuritasAutomation`:
 - `docs/adr/0003` — TenantConfig as the single narrow interface
 - `docs/adr/0004` — the shadow rule
 - `docs/adr/0005` — the requester is the site's responsible party
+
+Notes kept in this repo:
+
+- `docs/selenium-late-binding.md` — why the `Selenium` reference should go away, and the
+  "Selenium is not installed" guard that cannot currently fire
