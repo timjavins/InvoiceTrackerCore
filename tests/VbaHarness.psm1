@@ -75,7 +75,7 @@ function New-VbaHost {
         throw
     }
 
-    @{ Excel = $excel; Workbook = $wb }
+    @{ Excel = $excel; Workbook = $wb; DocumentModule = [bool]$DocumentModule }
 }
 
 function Invoke-VbaFunction {
@@ -84,6 +84,20 @@ function Invoke-VbaFunction {
         [Parameter(Mandatory)][string] $Name,
         [object[]] $Arguments = @()
     )
+
+    # A document-module host's procedures are members of the workbook COM object, not
+    # names Application.Run can resolve: unqualified, Run cannot see into ThisWorkbook at
+    # all, and even qualified as 'ThisWorkbook.Proc' it executes the procedure but discards
+    # a Function's return value -- so this would either error opaquely or silently return
+    # $null. Callers against a -DocumentModule host must call the workbook object directly,
+    # e.g. $VbaHost.Workbook.FiscalYearWeeks(2026).
+    if ($VbaHost.DocumentModule) {
+        throw "Invoke-VbaFunction cannot call '$Name' on a -DocumentModule host: " +
+              "Application.Run cannot resolve an unqualified name in a document module, and " +
+              "even qualified it discards a Function's return value. Call it as a COM method " +
+              "on the workbook object instead, e.g. `$VbaHost.Workbook.$Name(...)."
+    }
+
     switch ($Arguments.Count) {
         0 { $VbaHost.Excel.Run($Name) }
         1 { $VbaHost.Excel.Run($Name, $Arguments[0]) }

@@ -9,6 +9,8 @@ Reset-AssertCounters
 
 $fixture = Import-FiscalFixture -Path (Join-Path $repo 'fiscal-calendar-fixture.csv')
 
+Assert-Equal -Expected 46 -Actual @($fixture).Count -Because 'the fixture must carry all 46 published years (FY2005-FY2050); a silently dropped row would shrink the suite without failing it'
+
 $vba = New-VbaHost -SourceFiles @(Join-Path $repo 'FiscalCalendar.vb')
 try {
     Assert-Equal -Expected 'ok' -Actual (Invoke-VbaFunction -VbaHost $vba -Name 'FiscalCalendarSelfCheck') `
@@ -47,13 +49,13 @@ try {
     # The anchor helper, at both tie-break directions. 31 Jan 2026 IS a Saturday (no move);
     # 31 Jan 2027 is a Sunday (move back 1); 31 Jan 2007 is a Wednesday (move forward 3).
     Assert-Equal -Expected '2026-01-31' `
-                 -Actual (Invoke-VbaFunction -VbaHost $vba -Name 'SaturdayClosestTo' -Arguments @([datetime]'2026-01-31')) `
+                 -Actual (Invoke-VbaFunction -VbaHost $vba -Name 'FiscalSaturdayClosestTo' -Arguments @([datetime]'2026-01-31')) `
                  -Because 'anchor already on a Saturday does not move'
     Assert-Equal -Expected '2027-01-30' `
-                 -Actual (Invoke-VbaFunction -VbaHost $vba -Name 'SaturdayClosestTo' -Arguments @([datetime]'2027-01-31')) `
+                 -Actual (Invoke-VbaFunction -VbaHost $vba -Name 'FiscalSaturdayClosestTo' -Arguments @([datetime]'2027-01-31')) `
                  -Because 'anchor on a Sunday moves back one day'
     Assert-Equal -Expected '2007-02-03' `
-                 -Actual (Invoke-VbaFunction -VbaHost $vba -Name 'SaturdayClosestTo' -Arguments @([datetime]'2007-01-31')) `
+                 -Actual (Invoke-VbaFunction -VbaHost $vba -Name 'FiscalSaturdayClosestTo' -Arguments @([datetime]'2007-01-31')) `
                  -Because 'anchor on a Wednesday moves forward three days'
 
     # FY2026 is a 52-week year: 4,5,4 four times over.
@@ -88,6 +90,13 @@ try {
     Assert-Equal -Expected '2026-08-02' -Actual (Invoke-VbaFunction -VbaHost $vba -Name 'FiscalMonthStart' -Arguments @(2026, 7))  -Because 'FY2026 August starts (fiscal month 7, the index that is easy to confuse with September)'
     Assert-Equal -Expected '2026-08-30' -Actual (Invoke-VbaFunction -VbaHost $vba -Name 'FiscalMonthStart' -Arguments @(2026, 8))  -Because 'FY2026 September starts'
     Assert-Equal -Expected '2027-01-03' -Actual (Invoke-VbaFunction -VbaHost $vba -Name 'FiscalMonthStart' -Arguments @(2026, 12)) -Because 'FY2026 January starts'
+
+    # FY2023 is a 53-week year: the extra week lands on January (fiscal month 12), which shifts
+    # nothing before it but makes month 12 five weeks long and week 53 part of it. Every other
+    # month assertion here is in FY2026, a 52-week year, so this is the only coverage of the
+    # 53rd week changing month PLACEMENT rather than month length.
+    Assert-Equal -Expected '2023-12-31' -Actual (Invoke-VbaFunction -VbaHost $vba -Name 'FiscalMonthStart' -Arguments @(2023, 12)) -Because 'FY2023 fiscal January starts 2023-12-31'
+    Assert-Equal -Expected 12 -Actual (Invoke-VbaFunction -VbaHost $vba -Name 'FiscalMonthOf' -Arguments @([datetime]'2024-01-28')) -Because 'FY2023 week 53 falls in fiscal January (month 12)'
 
     # Week starts: first, a mid-year one, and the last week of a 52-week year.
     Assert-Equal -Expected '2026-02-01' -Actual (Invoke-VbaFunction -VbaHost $vba -Name 'FiscalWeekStart' -Arguments @(2026, 1))  -Because 'FY2026 week 1 start'
