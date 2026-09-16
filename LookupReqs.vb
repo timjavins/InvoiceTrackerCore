@@ -52,8 +52,12 @@ Public Function ReqJoinKeyColumn() As String
 End Function
 
 ' manageProtection defaults to True so the sub works from a caller that left the sheet
-' protected (UpdateCoupaData does). Callers that unprotect around a whole sequence -- both
-' Refresh paths -- pass False to avoid redundant toggling.
+' protected (UpdateCoupaData does). The two sibling Refresh paths differ, for real reasons:
+' JCI's Refresh brackets its whole sequence in its own UnprotectSheet/ProtectSheet window
+' (Refresh.vb:21,56) and passes False so this sub does not redundantly re-toggle inside it.
+' Securitas's Refresh does not unprotect around the sequence at all -- its sheets are
+' genuinely protected, and it defines a TenantSheetPassword -- so it passes True and relies
+' on this sub to manage protection itself.
 Public Sub LookupReqs(Optional ByVal announce As Boolean = True, _
                       Optional ByVal manageProtection As Boolean = True)
     Dim wsTracker As Worksheet
