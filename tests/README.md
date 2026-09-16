@@ -48,12 +48,49 @@ a syntax error only surfaces later, as a confusing COM error at the first `Appli
 red run looks like the harness itself is broken, check the injected source for a syntax error
 before suspecting the harness.
 
+**VBA compiles per module, on demand -- not the whole project up front.** A module that gets
+entered must have every name it references directly resolvable, including a call inside a branch
+that never executes at runtime, because runtime reachability is irrelevant to compilation. A module
+that is never entered, on the other hand, does not need its own callees resolvable, because it is
+never compiled at all. Concretely: injecting `LookupReqs.vb` requires also injecting
+`UnprotectSheet.vb` and `ProtectSheet.vb`, even when `manageProtection:=False` means those calls
+never run, while `TenantSheetPassword` -- referenced only inside those two modules' own bodies --
+needs no stub, because those bodies are never compiled unless something enters them. Getting this
+backwards looks like a harness bug (an "undefined" error for a name that is clearly stubbed
+elsewhere, or a missing stub that never seems to matter) when it is really about which module got
+entered.
+
 ## Never test a path that raises
 
 A test must never call a VBA procedure that will `Err.Raise`. An unhandled VBA error under
 `Application.Run` opens a modal End/Debug dialog; in the harness's hidden Excel instance nothing
 can dismiss it, the COM call blocks forever, and the dialog can surface in the user's own Excel
 session. Guard clauses are verified by code review, not by this suite.
+
+`Application.Visible = $false` does **not** suppress that dialog -- it renders on screen regardless
+of instance visibility. The danger is not that nobody *can* dismiss a modal in a hidden instance; it
+is that the **operator** must, in their own Excel session, because the blocked COM call never
+returns on its own. This is not theoretical: it has happened, mid-run, and the operator had to press
+OK by hand and abort. See "Timing out a stuck call" below for the harness's mitigation.
+
+## Timing out a stuck call
+
+`Invoke-VbaFunction` accepts `-TimeoutSeconds`, which defaults to `0` -- today's behaviour, wait
+indefinitely -- so no existing caller changes. A positive value arms a watchdog for that one call:
+if it has not returned in time, the watchdog kills **only the Excel process `New-VbaHost` captured
+for that host** and `Invoke-VbaFunction` throws a specific error naming the procedure that blocked,
+instead of leaving a hung COM call and a modal dialog for a human to find.
+
+`New-VbaHost` captures that PID by a before/after set difference of running `EXCEL` process IDs,
+taken immediately before and after it creates its own `Excel.Application`. If that difference is
+anything other than exactly one new PID, it stores nothing, and every kill path -- the watchdog here
+and `Remove-VbaHost`'s poll below -- becomes inert rather than guessing. That is deliberate: a wrong
+guess could kill the operator's own Excel, including a live cloud-hosted workbook with unsaved
+changes. Never hardcode or guess a PID to make a timeout "work".
+
+`Remove-VbaHost` also polls for about two seconds after calling `Quit()` -- which returns before the
+process has actually exited -- and kills the captured PID if it is still alive once that grace
+period elapses.
 
 ## Two layers: standard module vs. document module
 
