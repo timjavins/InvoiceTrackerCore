@@ -27,9 +27,24 @@
 Public Function ReqJoinKeyColumn() As String
     Dim col As String
 
+    ' On Error Resume Next below is there to absorb one specific case: a tenant that has not
+    ' declared "req-join-key" in its TenantConfig, which is the expected, common state for a
+    ' tenant that hasn't opted in yet. But it necessarily absorbs more than that -- it will just
+    ' as silently swallow a genuine bug inside that tenant's TenantColLetter. There is no
+    ' discriminator available to narrow on: every tenant's TenantColLetter raises the same
+    ' Err.Raise 5 for an unknown concept (see TenantConfig.vb in each variant repo), and error 5
+    ' from a real defect is not distinguishable from error 5 for "concept not declared". Adding
+    ' one (e.g. matching on Err.Source or Err.Description text) would be guessing at an implicit
+    ' contract those functions never promised to keep, for no proven gain, and it would risk the
+    ' two live workbooks (Securitas, JCI) this fallback exists to protect. So this breadth is
+    ' accepted deliberately, not missed: a broken req-join-key case in a tenant's config degrades
+    ' quietly to the submitted-invoice-number fallback below instead of failing loudly.
     On Error Resume Next
     col = TenantColLetter("req-join-key")
     On Error GoTo 0
+    Err.Clear   ' GoTo 0 disables the handler but leaves Err.Number populated from the attempt
+                ' above; clear it explicitly so a future insertion between here and the return
+                ' cannot mistake that stale error for one of its own.
 
     If Len(col) = 0 Then col = TenantColLetter("submitted-invoice-number")
 
