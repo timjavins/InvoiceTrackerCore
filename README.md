@@ -163,6 +163,28 @@ both tenants classify identically. It classifies from `TryResolveSiteRequester`'
 never from its `reason` prose — otherwise rewording a warning would silently change the
 classification.
 
+## The requisition join key
+
+`LookupReqs.vb` backfills the tracker's requisition number once Coupa has assigned one, joining
+tracker rows to the "Coupa Reqs" import sheet. `ReqJoinKeyColumn()` resolves which tracker column
+carries the value to join on: it prefers `TenantColLetter("req-join-key")` and falls back to
+`TenantColLetter("submitted-invoice-number")` when a tenant declares no `req-join-key`.
+
+`req-join-key` is for a tenant that raises a purchase order before any supplier document exists,
+and so has no submitted invoice # to join on — it mints its own key instead. Reusing
+`submitted-invoice-number` for that key would recreate the identity ambiguity ADR-0001 exists to
+prevent.
+
+The fallback is the compatibility guarantee: `SecuritasAutomation` and `JCI-invoice-tracker` need
+no change to keep joining on the column they always used. Both now declare `req-join-key`
+explicitly anyway, each naming its own existing submitted-invoice-number column — `O` for
+Securitas, `J` for JCI — so the declared value and the fallback agree for both today.
+
+A tenant whose `req-join-key` entry is missing or broken degrades quietly to the
+`submitted-invoice-number` fallback rather than failing loudly: every tenant's `TenantColLetter`
+raises the same error for an unknown concept, and core has no way to tell that apart from a real
+defect in the tenant's config.
+
 ## The fiscal calendar
 
 `FiscalCalendar.vb` computes Nordstrom's 4-5-4 retail fiscal calendar -- fiscal year
