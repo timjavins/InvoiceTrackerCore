@@ -15,6 +15,27 @@
 ' and appends everything else in export order, so "Supplier Part Number" has no guaranteed
 ' position.
 
+' Which tracker column holds the value that joins a row to its Coupa requisition.
+'
+' Securitas and JCI join on the submitted invoice # -- a number the supplier gave them. A tracker
+' that raises requisitions BEFORE any supplier document exists has no such number and mints its own
+' key instead, which is not an invoice number of either kind (see ADR-0001 on why conflating the
+' two identities is a bug waiting to happen).
+'
+' So: prefer an explicit req-join-key, fall back to submitted-invoice-number. The fallback keeps
+' every existing tenant working without touching its TenantConfig.
+Public Function ReqJoinKeyColumn() As String
+    Dim col As String
+
+    On Error Resume Next
+    col = TenantColLetter("req-join-key")
+    On Error GoTo 0
+
+    If Len(col) = 0 Then col = TenantColLetter("submitted-invoice-number")
+
+    ReqJoinKeyColumn = col
+End Function
+
 ' manageProtection defaults to True so the sub works from a caller that left the sheet
 ' protected (UpdateCoupaData does). Callers that unprotect around a whole sequence -- both
 ' Refresh paths -- pass False to avoid redundant toggling.
@@ -36,7 +57,7 @@ Public Sub LookupReqs(Optional ByVal announce As Boolean = True, _
 
     ' Where the submitted invoice # lives on each sheet.
     Dim colTrackerInvoice As String, colTrackerReq As String
-    colTrackerInvoice = TenantColLetter("submitted-invoice-number")
+    colTrackerInvoice = ReqJoinKeyColumn()
     colTrackerReq = TenantColLetter("requisition-number")
 
     Dim reqsHeaders As Object
