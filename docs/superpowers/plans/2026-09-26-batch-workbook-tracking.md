@@ -1387,7 +1387,24 @@ Verified on a scratch copy: <what was driven>."
 
 - [ ] **Step 1: Add the tenant accessors**
 
-Insert the same two functions as Task 6 Step 1, with the same comments and values, above `' Password used to protect the tracker sheet.` in `JCI-invoice-tracker/TenantConfig.vb`.
+In `JCI-invoice-tracker/TenantConfig.vb`, insert above `' Password used to protect the tracker sheet.`:
+
+```vb
+' --- Batch tracking -------------------------------------------------------------
+
+' Hidden sheet in this workbook logging every bill file already processed, by content hash.
+' See InvoiceTrackerCore's ProcessedBatchLog.vb.
+Public Function TenantProcessedBatchSheet() As String
+    TenantProcessedBatchSheet = "Processed Batches"
+End Function
+
+' Subfolder, beside the bill file, that a processed file is moved into. "" disables the move.
+' Cosmetic only -- the hash log is what stops a re-run.
+Public Function TenantProcessedFolder() As String
+    TenantProcessedFolder = "Processed"
+End Function
+
+```
 
 - [ ] **Step 2: Add the hash gate**
 
