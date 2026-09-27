@@ -109,8 +109,16 @@ written:
   red, not left for manual cleanup.
 - Rows that pass are written normally.
 - No red-cell/`REQ #` = `"DUPLICATE"` marking anymore — rejected rows simply
-  don't get inserted, so there's nothing to delete bottom-up afterward
-  (removes the `:199-217` cleanup path in `AddNewBills.vb`).
+  don't get inserted. `CheckNewBillsForDuplicates.vb` is deleted. The
+  `failureState` rollback at `AddNewBills.vb:199-217` **stays**: it undoes a
+  failed import, which is unrelated to duplicates.
+- A repair or installation code that repeats within the file skips **every**
+  row carrying it, because the tool cannot tell which copy is right.
+- The classification is a pure function in core, `ClassifyBillCodes` in
+  `BillCodeScreen.vb`. It takes arrays in, returns a status per row, and knows
+  nothing about bill types. Only Securitas calls it, and the decision that
+  monitoring may repeat stays in `AddNewBills`. Keeping it pure lets the core
+  harness test it.
 - End-of-run summary (`MsgBox`, matching the existing Coupa-warnings report
   style) lists bill codes added vs. skipped, and why each skip happened
   (already processed vs. repeat-in-file).
@@ -156,13 +164,20 @@ writeTag As String, ownedTags As Variant) As Long`, a new core module:
 2. Find each sheet's real last row with `Cells(Rows.Count, <BILL CODE
    col>).End(xlUp)`, never `UsedRange`. All-Years' `UsedRange` is stale: it ends
    at row 6611, while the data ends near 6288.
-3. Read `src` data and `dst` data as `Value2` arrays.
-4. Build one output array:
-   - every `dst` row whose tag is not in `ownedTags`, in their existing order;
-   - then every `src` row, with `writeTag` in `Source File`.
-5. Write the output array back in one `Value2` assignment starting at row 2,
-   then clear any leftover rows below it.
-6. Return the number of mirrored rows.
+3. Delete every `dst` row whose tag is in `ownedTags`. Work bottom-up, one
+   `Rows("a:b").Delete` per contiguous run. Owned rows are interleaved with
+   legacy rows (the migration did not sort by source), so this is many small
+   deletes, not one.
+4. Append every `src` data row below the new last row. First set each
+   destination column's `NumberFormat` from the source column's first data
+   row. Then write `src.Value` as one array and fill `Source File` with
+   `writeTag`.
+5. Return the number of mirrored rows.
+
+Legacy rows are never read back and rewritten. That is deliberate: writing a
+text value such as `0175` into a General-format cell turns it into the number
+175, and legacy cells were pasted without a guaranteed format. `.Value` is used
+rather than `.Value2` so dates and currency keep their types.
 
 The routine shows no `MsgBox` and calls no `Err.Raise`, so the test harness can
 drive it.
@@ -174,9 +189,15 @@ way. All-Years' current-year rows are not recalculated there.
 
 **The mirrored rows are read-only.** Edits belong in the working book, and any
 hand edit to an owned row in All-Years is overwritten by the next sync. `PAID`
-values in the working book reach All-Years as ordinary values. The separate,
-still-open request to stop `WriteFormulas_*` overwriting `PAID` cells applies
-to the working book and is not part of this spec.
+values in the working book reach All-Years as ordinary values.
+
+**Why `PAID` matters.** Much of 2023–2024 was dirty: some invoices were paid
+under different invoice numbers, so no lookup can find their payment. The user
+investigated those by hand and replaced the lookup formulas with the literal
+`PAID`. Those cells are the only record of the investigation. They sit in
+non-owned rows, so the mirror never touches them. The separate, still-open
+request to stop `WriteFormulas_*` from overwriting `PAID` cells is not part of
+this spec.
 
 **Securitas wrapper** — `SyncAllYears(Optional announce As Boolean)`, in
 `SecuritasAutomation`:
@@ -204,6 +225,8 @@ to the working book and is not part of this spec.
 - End of each `UpdateCoupaData` branch: `requisitions`, `invoices` **and
   `orders`**. The `orders` branch changes ORDER DATE and PO STATUS through
   formulas.
+- End of `Refresh`, on success. It rewrites REQ # (`LookupReqs`), payment
+  numbers and every formula column.
 - A manual `SyncAllYears` macro, so a person can re-sync after an outage.
 
 **How missed syncs are made visible.** Warn-and-skip is acceptable only because
@@ -281,7 +304,7 @@ needs no change:
 
 ```
 TenantAllYearsWorkbookPath() As String   ' SharePoint URL of All-Years
-TenantAllYearsSyncStampCell() As String  ' Helper cell for last successful sync
+TenantAllYearsSyncStampCell() As String  ' "E6" on Helper (E2-E5 hold import stamps)
 TenantAllYearsStaleDays() As Long        ' 3
 TenantAllYearsOwnedTags() As Variant     ' Array("2026:Invoices", "2026Model:Invoices")
 TenantAllYearsWriteTag() As String       ' "2026:Invoices"
@@ -317,7 +340,10 @@ On closing this work:
 1. **Redo the All-Years consolidation** once §3 has shipped. Rebuild the
    non-2026 history from the eight legacy sources, keeping every monitoring
    store row: dedup on the whole bill (BILL CODE + source), not on BILL CODE
-   alone. Then run one sync to lay the 2026 block on top.
+   alone. Then run one sync to lay the 2026 block on top. **Must carry across
+   every hand-set `PAID` value** from the current All-Years and the sources.
+   They record manual investigation that has no other record. Before replacing
+   anything, diff the `PAID` count between the old and new builds.
 2. **JCI All-Years workbook.** Inventory JCI's legacy sources, consolidate, then
    move the `SyncAllYears` wrapper into core and give JCI the accessors.
 
