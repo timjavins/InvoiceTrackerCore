@@ -1,12 +1,12 @@
-# Batch/Workbook Tracking + Monitoring-Aware Duplicate Check — Design
+# Batch/Workbook Tracking, Monitoring-Aware Duplicate Check, All-Years Mirror — Design
 
-Status: approved by user, ready for implementation plan
+Status: Features 1–2 approved; Feature 3 revised after review, pending user review
 Repos touched: `InvoiceTrackerCore` (shared), `SecuritasAutomation` (variant)
-Not touched: `JCI-invoice-tracker` (tenant config additions only; no behavior change)
+Not touched: `JCI-invoice-tracker` (Feature 1 tenant config additions only; no behavior change)
 
 ## Problem
 
-Two related gaps in the bill-ingestion flow (`AddNewBills` → `ProcessNewBills` →
+Three related gaps in the bill-ingestion flow (`AddNewBills` → `ProcessNewBills` →
 `CheckNewBillsForDuplicates`, all in `SecuritasAutomation/file ingesting/`):
 
 1. **No tracking of whether a source workbook/file has already been processed.**
@@ -23,16 +23,32 @@ Two related gaps in the bill-ingestion flow (`AddNewBills` → `ProcessNewBills`
    bills are correctly one-bill-code-per-row and should keep being rejected on
    any repeat, whether against existing rows or within the same file.
 
+3. **The All-Years archive is a frozen snapshot, and it is wrong for monitoring
+   bills.** `Securitas All-Years Invoices - Consolidated.xlsm` (same SharePoint
+   folder as the working book) was built once, 2026-08-31 to 2026-09-03, by
+   consolidating eight legacy sources, deduped to one row per bill code
+   (newest source wins), pasted values-only. Nothing has written to it since.
+   Because it kept one row per bill code, every monitoring bill lost all but one
+   of its store rows: BILL CODE `6005463095` has 9+ rows in the working book and
+   1 in All-Years (verified 2026-09-26). The only record of that migration is
+   `Excel-MCP/gaps-and-fixes.md`.
+
 ## Scope
 
 - Applies to Securitas and JCI equally for workbook/batch tracking (goes in
   core, gated by tenant config).
+- The All-Years mirror (§3) is Securitas-only: a pure routine in core, called by
+  a thin Securitas wrapper. JCI has no All-Years workbook yet.
 - The monitoring-aware duplicate-check fix is Securitas-only — JCI has no
   monitoring bills and keeps its own `MarkDuplicateInvoices` unchanged.
-- Checks run against the **working tracker workbook only** (e.g.
-  `2026 SECURITAS bills.xlsm`), never the All-Years archive.
+- Duplicate and already-processed checks (§1, §2) read the **working tracker
+  workbook only** (e.g. `2026 SECURITAS bills.xlsm`), never All-Years. All-Years
+  is written by §3, never read for decisions.
 - Out of scope: any change to JCI's duplicate logic, any change to the PDF
-  ingestion sidecar, any change to Coupa export handling.
+  ingestion sidecar, any change to how Coupa exports are parsed. (§3 adds a step
+  *after* each `UpdateCoupaData` branch; it does not change the import.)
+- Out of scope, follow-on tickets (see end): redoing the consolidation so
+  monitoring rows are preserved; building JCI's All-Years workbook.
 
 ## Design
 
@@ -101,6 +117,109 @@ written:
 
 JCI's `MarkDuplicateInvoices.vb` is unchanged.
 
+### 3. All-Years mirror (Securitas only)
+
+**Purpose:** All-Years is a backup of the working book and the cross-year
+lookup surface. It must receive every new bill and every Coupa-column change.
+
+**Mechanism: a whole-block mirror, not row matching.** Each sync replaces
+All-Years' entire current-year block with a fresh values-only copy of the
+working book's `Invoices` sheet. No row is matched to another row.
+
+Row matching was considered and rejected. BILL CODE is not unique for
+monitoring bills (N store rows share one code in both workbooks), so a
+key-based refresh would write one store's row over all N. There is also no
+"rows just updated" set to match from: most Coupa columns (T–AC) are live
+`XLOOKUP`s (`WriteFormulas_Tracker.vb:51-59`) that recalculate on every row
+whenever a Coupa sheet is replaced. A whole-block rewrite avoids both problems.
+Because each sync produces the same output from the same input, it can safely
+be re-run, and it recovers from any earlier failed sync.
+
+**Block ownership.** A row in All-Years belongs to the mirror when its
+`Source File` value is in the owned-tag set:
+
+- `"2026:Invoices"`: the tag the mirror writes (follows the `2025:Invoices`
+  convention).
+- `"2026Model:Invoices"`: the one-off label the migration script gave to rows
+  taken from the 2026 working book. The mirror claims these too, so the first
+  sync replaces them rather than duplicating them.
+
+Rows with any other tag (`2025:Invoices`, `RootNoYear:Invoices`, …) are never
+touched.
+
+**Algorithm** — `MirrorInvoiceBlock(src As Worksheet, dst As Worksheet,
+writeTag As String, ownedTags As Variant) As Long`, a new core module:
+
+1. Compare header rows by name. `dst` must have every `src` header, in the same
+   order, plus `Source File`. On mismatch, raise nothing, return `-1`, and write
+   nothing. The caller warns. Find `Source File` by header name, not position.
+2. Find each sheet's real last row with `Cells(Rows.Count, <BILL CODE
+   col>).End(xlUp)`, never `UsedRange`. All-Years' `UsedRange` is stale: it ends
+   at row 6611, while the data ends near 6288.
+3. Read `src` data and `dst` data as `Value2` arrays.
+4. Build one output array:
+   - every `dst` row whose tag is not in `ownedTags`, in their existing order;
+   - then every `src` row, with `writeTag` in `Source File`.
+5. Write the output array back in one `Value2` assignment starting at row 2,
+   then clear any leftover rows below it.
+6. Return the number of mirrored rows.
+
+The routine shows no `MsgBox` and calls no `Err.Raise`, so the test harness can
+drive it.
+
+**Values only.** Columns B–H and T–AC in the working book are formulas pointing
+at `'BU List'`, `'Coupa Reqs'`, `Helper!` and so on. The mirror copies their
+evaluated values, never their formulas. The migration built All-Years the same
+way. All-Years' current-year rows are not recalculated there.
+
+**The mirrored rows are read-only.** Edits belong in the working book, and any
+hand edit to an owned row in All-Years is overwritten by the next sync. `PAID`
+values in the working book reach All-Years as ordinary values. The separate,
+still-open request to stop `WriteFormulas_*` overwriting `PAID` cells applies
+to the working book and is not part of this spec.
+
+**Securitas wrapper** — `SyncAllYears(Optional announce As Boolean)`, in
+`SecuritasAutomation`:
+
+1. Resolve the path from `TenantAllYearsWorkbookPath()`. If All-Years is
+   already open in this instance, use that copy; otherwise open it with
+   `Application.EnableEvents = False`, because All-Years carries a copy of the
+   stack and its `Workbook_Open` must not fire.
+2. If `wb.ReadOnly`, skip: the file is locked elsewhere, and writes would only
+   reach memory.
+3. Call `MirrorInvoiceBlock` with no `MsgBox` or other user prompt between
+   reading and writing. That keeps the window for a concurrent edit as short as
+   possible.
+4. Save explicitly. Close only if the wrapper opened the file.
+5. On success, stamp the time in the working book at
+   `TenantAllYearsSyncStampCell()` (a `Helper` cell, same pattern as
+   `TenantImportTimestampCell`).
+6. On any failure, show one warning and leave the stamp unchanged. Never roll
+   back or block the operation that called the sync.
+
+**Call sites:**
+- End of `AddNewBills`, after the `failureState` rollback check
+  (`AddNewBills.vb:199-217`) and after the Feature 2 skip logic. The mirror
+  reads the sheet, so it only ever sees rows that were actually written.
+- End of each `UpdateCoupaData` branch: `requisitions`, `invoices` **and
+  `orders`**. The `orders` branch changes ORDER DATE and PO STATUS through
+  formulas.
+- A manual `SyncAllYears` macro, so a person can re-sync after an outage.
+
+**How missed syncs are made visible.** Warn-and-skip is acceptable only because
+missed syncs are visible and recover on the next success. At the start of
+`AddNewBills` and `UpdateCoupaData`, if the sync stamp is older than
+`TenantAllYearsStaleDays()` (Securitas: 3), show one warning naming the last
+successful sync. Any later successful sync fixes all the drift, because it
+rewrites the whole block.
+
+**Concurrency: known limit.** Excel can't lock a co-authored workbook. If a
+person edits All-Years between the read and the write, or two users sync at
+once, one write can be lost at cell level. The mirror limits the damage: the
+next sync rewrites the owned block exactly. Edits a person makes to non-owned
+rows during a sync could still be lost. That risk is accepted, because
+All-Years' non-owned rows are historical and not edited in normal use.
+
 ## Error Handling
 
 - Hash failure (file locked, `certutil` unavailable/blocked) → abort before
@@ -111,6 +230,12 @@ JCI's `MarkDuplicateInvoices.vb` is unchanged.
   already correctly recorded regardless of whether the move succeeded.
 - Hidden log sheet absent (older tracker workbook copy, first rollout) →
   created on first write.
+- All-Years unreachable, read-only, or with mismatched headers → one warning;
+  the calling operation completes; the sync stamp stays stale, so the staleness
+  warning keeps showing until a sync succeeds.
+- Feature 1 records a batch even if the All-Years sync after it fails. That is
+  safe, because the next successful sync mirrors every row, including that
+  batch's.
 
 ## Testing
 
@@ -123,6 +248,19 @@ JCI's `MarkDuplicateInvoices.vb` is unchanged.
   covering the corrected duplicate-check table above (repair/installation
   reject-on-repeat, monitoring allow-repeat-within-file, both reject
   already-processed) since this change touches exactly that path.
+- `Test-MirrorInvoiceBlock.ps1` (core, **required**): two sheets in one hidden
+  workbook act as source and destination, so no two-workbook harness is needed.
+  Cases:
+  - a monitoring group of N rows sharing a code arrives as N rows;
+  - non-owned rows are preserved, in order;
+  - both owned tags are replaced;
+  - re-running gives identical output;
+  - shrinking the source clears leftover rows;
+  - a header mismatch returns -1 and writes nothing;
+  - a formula source cell arrives as its value.
+- The Securitas wrapper (open, `ReadOnly`, events, save) can't be simulated
+  against SharePoint. It is verified by a written manual checklist run against a
+  **copy** of All-Years, never the live file.
 - Per the existing harness constraint, tests must not exercise any path that
   can call `Err.Raise` (blocks the hidden COM instance on the error dialog).
 
@@ -137,6 +275,21 @@ TenantProcessedFolder() As String       ' "" disables the cosmetic move
 
 Both Securitas and JCI define these. Core ships no default (consistent with
 ADR-0003 — a stack without a `TenantConfig.vb` doesn't compile).
+
+Securitas only, read by its `SyncAllYears` wrapper rather than by core, so JCI
+needs no change:
+
+```
+TenantAllYearsWorkbookPath() As String   ' SharePoint URL of All-Years
+TenantAllYearsSyncStampCell() As String  ' Helper cell for last successful sync
+TenantAllYearsStaleDays() As Long        ' 3
+TenantAllYearsOwnedTags() As Variant     ' Array("2026:Invoices", "2026Model:Invoices")
+TenantAllYearsWriteTag() As String       ' "2026:Invoices"
+```
+
+The tags are year-bound. At year rollover, the new working book declares the
+new year's write tag, and the previous year's block remains as non-owned
+history.
 
 ## Documentation follow-up (doc-sync-core)
 
@@ -153,6 +306,20 @@ On closing this work:
   the hidden-sheet log location turns out to need its own contract decision,
   add an ADR entry in `SecuritasAutomation/docs/adr/` (shared ADR series —
   do not start a separate series in core, per existing convention).
+
+- Record the 2026-08-31 to 2026-09-03 All-Years consolidation on the
+  Coordination Board, including its dedup key (one row per bill code, newest
+  source wins) and the monitoring-row loss that key caused. Its only current
+  record is `Excel-MCP/gaps-and-fixes.md`.
+
+## Follow-on Tickets (not in this plan)
+
+1. **Redo the All-Years consolidation** once §3 has shipped. Rebuild the
+   non-2026 history from the eight legacy sources, keeping every monitoring
+   store row: dedup on the whole bill (BILL CODE + source), not on BILL CODE
+   alone. Then run one sync to lay the 2026 block on top.
+2. **JCI All-Years workbook.** Inventory JCI's legacy sources, consolidate, then
+   move the `SyncAllYears` wrapper into core and give JCI the accessors.
 
 ## Commit Attribution
 
