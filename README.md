@@ -236,6 +236,15 @@ beside the file. A name collision gets a timestamp suffix. The move is cosmetic:
 name disables it, and a failed move is reported but changes nothing, since the hash log is the
 record.
 
+## Screening bill codes before import
+
+`BillCodeScreen.vb`'s `ClassifyBillCodes` marks each incoming row `already-processed` (its code
+is in the tracker's existing rows), `repeat-in-file` (its code is on more than one incoming row,
+and the caller disallows that), or `""` (write it). It runs **before** any row is written, so
+skipped rows never land and nothing has to be marked red or deleted. It knows nothing about bill
+types: Securitas passes `allowRepeatsInFile = True` for monitoring bills, which legitimately put
+one bill code on several store rows.
+
 ## Design docs
 
 Architecture decisions and the domain glossary live in `SecuritasAutomation`:
