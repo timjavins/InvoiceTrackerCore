@@ -127,6 +127,83 @@ try {
     Assert-Equal $true ($ws.Cells(3,3).HasFormula) -Because 'the second column formula cell is never touched either'
 } finally { Remove-VbaHost -VbaHost $vba | Out-Null }
 
+# --- Sheet sweep: formula cell in the middle of a literal column -------------------------
+# Guarantee #1 (never write a formula cell) must hold even when literal cells needing changes
+# surround the formula on both sides. This is also the only case that exercises NicWriteRuns's
+# per-run write path, since every currently-configured tenant column has no formula cells at
+# all -- the common path is the whole-range write exercised by every other case in this file.
+$vba = New-VbaHost -SourceFiles @($src, $driver)
+try {
+    $ws = $vba.Workbook.Worksheets(1)
+
+    Set-Cell $ws 1 1 'ID'
+    Set-Cell $ws 2 1 111          # numeric, before the formula: must normalize
+    Set-Cell $ws 3 1 222          # numeric, before the formula: must normalize
+    Set-Cell $ws 4 1 '333'        # already-clean text, before the formula: not rewritten
+    Set-Cell $ws 5 1 '=5+5' -AsFormula   # formula, mid-column: must never be touched
+    Set-Cell $ws 6 1 444          # numeric, after the formula: must normalize
+    Set-Cell $ws 7 1 ' 555 '      # padded string, after the formula: must normalize
+    Set-Cell $ws 8 1 'WARRANTY'   # marker text, after the formula: left alone
+    Set-Cell $ws 9 1 $null        # blank, after the formula: left alone
+
+    $count = Invoke-VbaFunction -VbaHost $vba -Name 'T_Sweep' -Arguments @('A') -TimeoutSeconds 30
+
+    Assert-Equal 4 $count -Because 'exactly the four cells needing a change were counted, formula excluded'
+
+    Assert-Equal $true ($ws.Cells(5,1).HasFormula) -Because 'the mid-column formula cell is still a formula'
+    Assert-Equal '=5+5' ($ws.Cells(5,1).Formula) -Because 'the formula text is unchanged'
+    Assert-Equal 10 ($ws.Cells(5,1).Value2) -Because 'the formula still calculates'
+
+    Assert-Equal 'String' ($ws.Cells(2,1).Value2.GetType().Name) -Because 'a numeric cell before the formula becomes text'
+    Assert-Equal '111' ($ws.Cells(2,1).Value2) -Because 'A2 keeps its digits exactly'
+    Assert-Equal '222' ($ws.Cells(3,1).Value2) -Because 'A3 keeps its digits exactly'
+    Assert-Equal '333' ($ws.Cells(4,1).Value2) -Because 'an already-clean text cell before the formula is not rewritten'
+
+    Assert-Equal 'String' ($ws.Cells(6,1).Value2.GetType().Name) -Because 'a numeric cell after the formula becomes text too'
+    Assert-Equal '444' ($ws.Cells(6,1).Value2) -Because 'A6 keeps its digits exactly'
+    Assert-Equal '555' ($ws.Cells(7,1).Value2) -Because 'a padded string after the formula is trimmed'
+    Assert-Equal 'WARRANTY' ($ws.Cells(8,1).Value2) -Because 'a marker string after the formula is left alone'
+    Assert-Equal '' ([string]$ws.Cells(9,1).Value2) -Because 'a blank cell after the formula stays blank'
+} finally { Remove-VbaHost -VbaHost $vba | Out-Null }
+
+# --- Sheet sweep: larger scale, mixed shapes, and a timing regression guard ---------------
+# A generous wall-clock ceiling here is a regression guard against reintroducing a per-cell
+# (O(n) COM round trips) sweep by accident -- not a tight performance benchmark.
+$vba = New-VbaHost -SourceFiles @($src, $driver)
+try {
+    $ws = $vba.Workbook.Worksheets(1)
+    Set-Cell $ws 1 1 'ID'
+
+    $rowCount = 300
+    $expectedChanged = 0
+    for ($i = 0; $i -lt $rowCount; $i++) {
+        $row = $i + 2
+        switch ($i % 3) {
+            0 { Set-Cell $ws $row 1 (1000000 + $i); $expectedChanged++ }
+            1 { Set-Cell $ws $row 1 ([string]$i) }
+            default { Set-Cell $ws $row 1 $null }
+        }
+    }
+
+    $sw = [System.Diagnostics.Stopwatch]::StartNew()
+    $count = Invoke-VbaFunction -VbaHost $vba -Name 'T_Sweep' -Arguments @('A') -TimeoutSeconds 30
+    $sw.Stop()
+
+    Assert-Equal $expectedChanged $count -Because 'every numeric row across a few hundred rows was counted, and only those'
+    Assert-Equal $true ($sw.Elapsed.TotalSeconds -lt 10) -Because 'the bulk sweep completes well under a generous ceiling, guarding against an accidental per-cell reintroduction'
+
+    Assert-Equal 'String' ($ws.Cells(2,1).Value2.GetType().Name) -Because 'the first numeric row becomes text'
+    Assert-Equal '1000000' ($ws.Cells(2,1).Value2) -Because 'the first numeric row keeps its digits exactly'
+    Assert-Equal '1' ($ws.Cells(3,1).Value2) -Because 'an already-clean text row is untouched in value'
+    Assert-Equal '' ([string]$ws.Cells(4,1).Value2) -Because 'a blank row stays blank'
+
+    $tailIndex = $rowCount - 1
+    while (($tailIndex % 3) -ne 0) { $tailIndex-- }
+    $tailRow = $tailIndex + 2
+    Assert-Equal 'String' ($ws.Cells($tailRow,1).Value2.GetType().Name) -Because 'the last numeric row in the range also becomes text'
+    Assert-Equal ([string](1000000 + $tailIndex)) ($ws.Cells($tailRow,1).Value2) -Because 'the last numeric row keeps its digits exactly'
+} finally { Remove-VbaHost -VbaHost $vba | Out-Null }
+
 # --- Sheet sweep: filter-proofing ---------------------------------------------------------
 # End(xlUp) and Find both walk visible cells only under an AutoFilter, so either would miss a
 # filtered-out trailing row. NormalizeIdentifierColumnsOn instead reads UsedRange's full extent,
