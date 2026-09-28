@@ -87,6 +87,18 @@ try {
     Assert-Equal 7 (Get-LastRow $d 5) -Because 'a refused mirror writes nothing'
     $d.Cells(1,3).Value2 = ' TOTAL '
 
+    $d.Cells(1,6).Value2 = 'EXTRA'
+    Assert-Equal -1 (& $mirror) -Because 'a column after Source File refuses'
+    Assert-Equal 7 (Get-LastRow $d 5) -Because 'a refused mirror writes nothing'
+    $d.Cells(1,6).ClearContents() | Out-Null
+
+    $s.Src.Cells(1,2).Value2 = 'CODE'
+    $d.Cells(1,2).Value2 = 'CODE'
+    Assert-Equal -1 (& $mirror) -Because 'a source with no BILL CODE header refuses'
+    Assert-Equal 7 (Get-LastRow $d 5) -Because 'a refused mirror writes nothing'
+    $s.Src.Cells(1,2).Value2 = ' BILL CODE '
+    $d.Cells(1,2).Value2 = ' BILL CODE '
+
     $s.Src.Range('A2:D10').ClearContents() | Out-Null
     Assert-Equal -1 (& $mirror) -Because 'an empty source refuses rather than wiping the owned block'
     Assert-Equal 7 (Get-LastRow $d 5) -Because 'the owned block survives an empty source'
