@@ -54,8 +54,11 @@ End Function
 ' Each column is read in bulk -- one .Value read and one .Formula read over rows 2..lastRow --
 ' and computed entirely in memory before anything is written back, the same read/compute/write
 ' shape ConvertStoreNumbers.vb already uses. That turns a ~3500-row column from ~7000 COM round
-' trips (HasFormula + Value per cell) into two reads and, in the common case where the column
-' has no formula cells, exactly one bulk write. See NicSweepColumn.
+' trips (HasFormula + Value per cell) into two reads plus one bulk write per contiguous run of
+' rows that actually need a change -- on a first, unnormalized sweep that is the whole column in
+' one write; once most of a column is already normalized, later sweeps write only what changed
+' and nothing else, not even a redundant format touch on a cell that didn't need one. See
+' NicSweepColumn.
 '
 ' Returns the count of cells actually changed. Never raises and never shows a dialog -- this
 ' runs from Refresh, where an unhandled error must not abort the rest of the run, and the test
@@ -110,23 +113,26 @@ End Function
 ' each over the whole range, decides in memory which rows are formula cells (never touched,
 ' per guarantee #1 -- rewriting a formula cell's value would replace the formula with a
 ' literal) and which non-formula cells actually need a change, then writes back with as few
-' COM calls as possible:
+' COM calls as possible, in exactly two ways:
 '   - filterActive (the sheet has an active AutoFilter hiding rows right now): a multi-row
 '     array write is unsafe in this state -- see NicWritePerCell -- so every changed,
 '     non-formula row is written one cell at a time, exactly as this module did before this
 '     rewrite. Rare in a scheduled Refresh, but must stay correct if the user is filtering the
 '     tracker when it runs.
-'   - No formula cells and no active filter (the common, currently-only case for every
-'     configured tenant column): one blanket NumberFormat = "@" plus one blanket Value = array
-'     over the whole range, exactly ConvertStoreNumbersOn's shape. Cells that don't need a
-'     value change keep their own current value in the array, so the bulk write doesn't alter
-'     them.
-'   - A formula cell mixed into the column, filter not active (rare, never configured today,
-'     but must stay correct if it ever happens): the whole-range write is unsafe, since
-'     writing .Value to a range containing a formula cell would wipe that formula. Instead,
-'     NicWriteRuns writes one bulk NumberFormat/Value per maximal contiguous run of changed,
-'     non-formula rows, so a long clean stretch still costs one call and a formula cell is
-'     never in any written range.
+'   - Otherwise (the common case): NicWriteRuns, which writes one bulk NumberFormat/Value per
+'     maximal contiguous run of rows that both need a change and are not a formula. A cell that
+'     doesn't need a value change (already-normalized text, WARRANTY-style markers, blank/
+'     Null/Error) gets no write at all, format or value, which is what keeps an
+'     already-normalized column diff-quiet on a live shared workbook (guarantee #4) -- there is
+'     deliberately no separate "whole range in one shot" branch, because that would write
+'     NumberFormat/Value to every cell in the range including ones that don't need it. On the
+'     first sweep of an unnormalized column, every row needs writing, so the whole column is
+'     one contiguous run and this still collapses to exactly one bulk write -- the performance
+'     win is unchanged for that case. On a later Refresh, once most cells are already
+'     normalized, it naturally shrinks to writing only the runs that actually changed, which is
+'     the guarantee working as designed, not a special case. A formula cell mixed into the
+'     column (rare, never configured today) is simply never marked needsWrite, so it can never
+'     be inside a written range either way.
 ' Returns the count of cells actually changed (numeric conversions plus string cells whose
 ' normalized form differs from the raw text).
 Private Function NicSweepColumn(ByVal ws As Worksheet, ByVal colLetter As String, _
@@ -152,9 +158,6 @@ Private Function NicSweepColumn(ByVal ws As Worksheet, ByVal colLetter As String
     Dim targetValues() As Variant
     ReDim targetValues(1 To rowCount, 1 To 1)
 
-    Dim anyFormula As Boolean
-    anyFormula = False
-
     Dim changed As Long
     changed = 0
 
@@ -174,7 +177,6 @@ Private Function NicSweepColumn(ByVal ws As Worksheet, ByVal colLetter As String
 
         If NicIsFormulaText(rawFormula) Then
             isFormulaRow(r) = True
-            anyFormula = True
             targetValues(r, 1) = rawValue
 
         ElseIf IsError(rawValue) Or IsNull(rawValue) Or IsEmpty(rawValue) Then
@@ -210,9 +212,6 @@ Private Function NicSweepColumn(ByVal ws As Worksheet, ByVal colLetter As String
 
     If filterActive Then
         NicWritePerCell ws, colLetter, isFormulaRow, needsWrite, targetValues, rowCount
-    ElseIf Not anyFormula Then
-        targetRange.NumberFormat = "@"
-        targetRange.Value = targetValues
     Else
         NicWriteRuns ws, colLetter, isFormulaRow, needsWrite, targetValues, rowCount
     End If

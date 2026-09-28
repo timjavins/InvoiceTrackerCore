@@ -197,13 +197,19 @@ Number silently breaks every formula keyed on it. See
 `NormalizeIdentifierColumnsOn(ws, cols)` sweeps a sheet/column list with a bulk read/compute/
 write per column, the same shape `ConvertStoreNumbers.vb` uses: one read of `.Value` and one
 read of `.Formula` over the whole column, everything decided in memory (a cell is a formula
-cell when its `.Formula` text starts with `"="`), then written back in as few calls as
-possible — one blanket `NumberFormat = "@"` plus one blanket `Value = array` for the common
-case of a column with no formula cells, or one write per contiguous run of changed rows when a
-formula cell is mixed in, so it is never included in a written range. Formula cells are always
-skipped outright, and an already-normalized text cell keeps its own value in the array so the
-bulk write doesn't rewrite it, keeping co-author writes minimal. It finds each column's last
-row by reading the whole `UsedRange` extent and scanning for the last non-blank cell in memory,
+cell when its `.Formula` text starts with `"="`), then written back with one `NumberFormat =
+"@"` plus `Value = array` write per maximal contiguous run of rows that actually need a change.
+Formula cells are never marked as needing a change, so they're never inside a written range;
+an already-normalized text cell, a WARRANTY-style marker, and a blank/Null/Error cell are the
+same — none of them gets a format or value write, not just an unchanged one. On a first sweep
+of an unnormalized column every row needs writing, so the whole column is one run and this
+still collapses to a single bulk write; later sweeps naturally shrink to writing only what
+changed. There is deliberately no separate "whole range in one shot, no formula cells" branch,
+because that would write `NumberFormat`/`Value` to every cell in the range including ones that
+never needed it — an earlier draft of this rewrite did exactly that, and it was caught in
+review because a co-author-visible format write is exactly what guarantee #4 exists to prevent.
+It finds each column's last row by reading the whole `UsedRange` extent and scanning for the
+last non-blank cell in memory,
 because both `End(xlUp)` and `Find` walk visible cells only and would miss a row an AutoFilter
 is hiding — the same trap `MirrorInvoiceBlock.vb` documents. That same AutoFilter hiding also
 makes a multi-row bulk *write* unreliable (confirmed directly: a written array can land on the
