@@ -226,6 +226,11 @@ refuse a bill file it has already processed. The file is identified by SHA-256 o
 `HashFile` returns `""` on any failure and never raises. Callers treat `""` as "stop before
 opening the file".
 
+`ProcessedBatchLog.vb` keeps the log on a hidden sheet inside the working tracker, named by
+`TenantProcessedBatchSheet()`, one row per processed file: hash, file name, tenant, time, rows
+added, rows skipped. The sheet is created on first write. Every tenant that stacks core must
+declare `TenantProcessedBatchSheet()` and `TenantProcessedFolder()` (ADR-0003).
+
 ## Design docs
 
 Architecture decisions and the domain glossary live in `SecuritasAutomation`:
