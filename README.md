@@ -216,6 +216,16 @@ forbids things a standard module allows, and this module could otherwise pass ev
 assertion and still fail to compile in production. See `tests/README.md` for why there are two
 scripts and what each one does and does not prove.
 
+## Batch tracking
+
+`HashFile.vb`, `ProcessedBatchLog.vb` and `MoveProcessedFile.vb` let a tenant's `AddNewBills`
+refuse a bill file it has already processed. The file is identified by SHA-256 of its bytes
+(`certutil`), so a renamed or re-sent copy is still recognised. See
+`docs/superpowers/specs/2026-09-26-batch-workbook-tracking-design.md`, section 1.
+
+`HashFile` returns `""` on any failure and never raises. Callers treat `""` as "stop before
+opening the file".
+
 ## Design docs
 
 Architecture decisions and the domain glossary live in `SecuritasAutomation`:
