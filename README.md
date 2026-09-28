@@ -231,6 +231,11 @@ opening the file".
 added, rows skipped. The sheet is created on first write. Every tenant that stacks core must
 declare `TenantProcessedBatchSheet()` and `TenantProcessedFolder()` (ADR-0003).
 
+`MoveProcessedFile.vb` moves a finished file into the subfolder `TenantProcessedFolder()` names,
+beside the file. A name collision gets a timestamp suffix. The move is cosmetic: an empty folder
+name disables it, and a failed move is reported but changes nothing, since the hash log is the
+record.
+
 ## Design docs
 
 Architecture decisions and the domain glossary live in `SecuritasAutomation`:
