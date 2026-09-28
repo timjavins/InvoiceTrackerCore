@@ -194,13 +194,22 @@ never coerce a numeric key to match a text value, so a tracker identifier cell t
 Number silently breaks every formula keyed on it. See
 `notes/identifier-types-investigation.md` for the live-workbook evidence and root cause.
 
-`NormalizeIdentifierColumnsOn(ws, cols)` sweeps a sheet/column list, sets `NumberFormat = "@"`
-before rewriting a cell, skips formula cells outright, and leaves an already-normalized text
-cell untouched to keep co-author writes minimal. It finds each column's last row by reading the
-whole `UsedRange` extent and scanning for the last non-blank cell in memory, because both
-`End(xlUp)` and `Find` walk visible cells only and would miss a row an AutoFilter is hiding —
-the same trap `MirrorInvoiceBlock.vb` documents. It never raises and never shows a dialog: on
-error it returns whatever it already normalized.
+`NormalizeIdentifierColumnsOn(ws, cols)` sweeps a sheet/column list with a bulk read/compute/
+write per column, the same shape `ConvertStoreNumbers.vb` uses: one read of `.Value` and one
+read of `.Formula` over the whole column, everything decided in memory (a cell is a formula
+cell when its `.Formula` text starts with `"="`), then written back in as few calls as
+possible — one blanket `NumberFormat = "@"` plus one blanket `Value = array` for the common
+case of a column with no formula cells, or one write per contiguous run of changed rows when a
+formula cell is mixed in, so it is never included in a written range. Formula cells are always
+skipped outright, and an already-normalized text cell keeps its own value in the array so the
+bulk write doesn't rewrite it, keeping co-author writes minimal. It finds each column's last
+row by reading the whole `UsedRange` extent and scanning for the last non-blank cell in memory,
+because both `End(xlUp)` and `Find` walk visible cells only and would miss a row an AutoFilter
+is hiding — the same trap `MirrorInvoiceBlock.vb` documents. That same AutoFilter hiding also
+makes a multi-row bulk *write* unreliable (confirmed directly: a written array can land on the
+wrong visible row while a hidden row keeps its stale value), so whenever the sheet has an
+active filter the sweep falls back to one write per changed cell instead of a bulk range write.
+It never raises and never shows a dialog: on error it returns whatever it already normalized.
 
 `NormalizeIdentifierColumns(announce, manageProtection)` is the entry point Refresh calls: it
 resolves the tracker sheet via `TenantSheetName("tracker")` and the columns via
