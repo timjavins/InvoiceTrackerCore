@@ -1772,6 +1772,7 @@ Before checking anything else:
 7. Run `UpdateCoupaData` with an orders export. Expect a silent sync, with `Helper!E6` updated.
 8. Confirm the archive copy opened by the sync has AutoSave off (File > the AutoSave toggle), and that its Invoices sheet password matches TenantSheetPassword() ("Formulas").
 9. Open the archive copy yourself, edit a cell without saving, then run SyncAllYearsNow. Expect the "open with unsaved changes" refusal and no change to the copy.
+10. Apply a filter (any criteria) to the archive copy's Invoices sheet and a different filter to the working copy's Invoices sheet, then run SyncAllYearsNow. Expect success ("N row(s) mirrored"), and both sheets left with AutoFilter arrows present but no criteria applied.
 
 - [ ] **Step 6: Commit**
 

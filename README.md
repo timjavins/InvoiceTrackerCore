@@ -272,6 +272,10 @@ hidden by filter criteria) is refused outright, before any delete -- neither she
 deleted, or written. A filter is never cleared or changed to work around this: the archive is
 shared, so its view must stay exactly as the caller left it.
 
+In practice this refusal is a backstop, not the normal path: the Securitas `SyncAllYears`
+wrapper clears AutoFilter criteria on both sheets before calling this routine, the same way
+`Refresh` does, so `FilterMode` is normally already false by the time `MirrorInvoiceBlock` runs.
+
 That refusal exists because the more surgical fix was tried first and measured, not assumed.
 `End(xlUp)` walks like Ctrl+Up and returns the last *visible* row on a filtered sheet, which
 would truncate a filtered source or leave filtered-out legacy rows in the archive unreplaced

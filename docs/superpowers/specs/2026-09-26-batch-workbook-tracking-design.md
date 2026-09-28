@@ -214,14 +214,20 @@ this spec.
    the stack and its `Workbook_Open` must not fire.
 2. If `wb.ReadOnly`, skip: the file is locked elsewhere, and writes would only
    reach memory.
-3. Call `MirrorInvoiceBlock` with no `MsgBox` or other user prompt between
+3. Clear AutoFilter criteria on both Invoices sheets -- the working book's and
+   the archive's -- the same way `Refresh` does for the working sheet: arrows
+   stay, criteria do not (user decision, 2026-09-28). A filtered sheet only
+   shows `MirrorInvoiceBlock`'s last-row detection its visible rows, which
+   would mirror an incomplete block; `MirrorInvoiceBlock`'s own `FilterMode`
+   refusal stays as a backstop for whatever this step cannot clear.
+4. Call `MirrorInvoiceBlock` with no `MsgBox` or other user prompt between
    reading and writing. That keeps the window for a concurrent edit as short as
    possible.
-4. Save explicitly. Close only if the wrapper opened the file.
-5. On success, stamp the time in the working book at
+5. Save explicitly. Close only if the wrapper opened the file.
+6. On success, stamp the time in the working book at
    `TenantAllYearsSyncStampCell()` (a `Helper` cell, same pattern as
    `TenantImportTimestampCell`).
-6. On any failure, show one warning and leave the stamp unchanged. Never roll
+7. On any failure, show one warning and leave the stamp unchanged. Never roll
    back or block the operation that called the sync.
 
 **Call sites:**
