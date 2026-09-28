@@ -1,5 +1,11 @@
 ' Replaces dst's owned block with a values-only copy of src, and returns the rows copied, or
-' -1 if it wrote nothing.
+' -1 on failure. The two failure paths are not equivalent: the refusal checks in step 1 (headers
+' don't line up, no BILL CODE column, tag column missing or misplaced) and the empty-source guard
+' in step 2 all return -1 having written nothing, before any row is touched. An error raised
+' mid-way -- during the deletes in step 3 or the append in step 4 -- can return -1 having already
+' deleted some or all of dst's owned rows without appending their replacements, leaving dst
+' partially written. Callers must not treat -1 as "dst is unchanged"; the next successful run
+' repairs any such partial write, because it always replaces the whole owned block again.
 '
 ' Built for the All-Years archive (batch-tracking spec, section 3): src is the working book's
 ' Invoices sheet, dst the archive's, which has the same columns plus a trailing "Source File"
