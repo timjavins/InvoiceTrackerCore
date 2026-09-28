@@ -144,6 +144,9 @@ Create `HashFile.vb`:
 '
 ' "" is the failure signal, never Err.Raise: callers treat "" as "stop before opening the
 ' file", and the test harness cannot survive a raised error.
+'
+' Returns the hash only; it stores nothing. AddNewBills passes it to ProcessedBatchLog, which
+' keeps it in column A of the hidden "Processed Batches" sheet in the tracker workbook.
 Public Function HashFile(ByVal filePath As String) As String
     Dim outPath As String
     Dim wsh As Object
