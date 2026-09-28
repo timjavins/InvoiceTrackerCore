@@ -245,6 +245,20 @@ skipped rows never land and nothing has to be marked red or deleted. It knows no
 types: Securitas passes `allowRepeatsInFile = True` for monitoring bills, which legitimately put
 one bill code on several store rows.
 
+## Mirroring a tracker into an archive
+
+`MirrorInvoiceBlock.vb` replaces the rows of an archive sheet that belong to the current year,
+those whose trailing `Source File` tag is in `ownedTags`, with a values-only copy of a tracker
+sheet, and never touches any other row. It refuses, writing nothing and returning `-1`, when:
+- the headers differ, or the archive has a column after `Source File`;
+- the source has no `BILL CODE` header;
+- the source is empty.
+
+Owned rows are deleted and re-appended rather than the sheet being rewritten, because writing
+a legacy text value such as `0175` back into a General cell converts it to a number. The
+Securitas `SyncAllYears` wrapper supplies the SharePoint side; see the batch-tracking spec,
+section 3.
+
 ## Design docs
 
 Architecture decisions and the domain glossary live in `SecuritasAutomation`:
