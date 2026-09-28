@@ -254,6 +254,13 @@ sheet, and never touches any other row. It refuses, writing nothing and returnin
 - the source has no `BILL CODE` header;
 - the source is empty.
 
+A `-1` from one of those refusals means the archive is untouched, but `-1` can also come from an
+error raised mid-way through the delete-then-append (an error during the row deletes or the
+append itself). That case can leave the archive with owned rows already deleted and their
+replacements not yet appended -- a partial write, not a no-op. Callers cannot tell the two apart
+from the return value alone and must not assume `-1` means nothing changed; the next successful
+run repairs any partial write, because it always replaces the whole owned block again.
+
 Owned rows are deleted and re-appended rather than the sheet being rewritten, because writing
 a legacy text value such as `0175` back into a General cell converts it to a number. The
 Securitas `SyncAllYears` wrapper supplies the SharePoint side; see the batch-tracking spec,
