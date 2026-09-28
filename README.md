@@ -185,6 +185,30 @@ A tenant whose `req-join-key` entry is missing or broken degrades quietly to the
 raises the same error for an unknown concept, and core has no way to tell that apart from a real
 defect in the tenant's config.
 
+## Normalizing identifier columns
+
+`NormalizeIdentifierColumns.vb` keeps REQ #, invoice numbers, and payment # as text on the
+tracker sheet, the same way `ConvertStoreNumbers.vb` zero-pads STORE #. Every Coupa-side sheet
+(`Coupa Reqs`, `Coupa Invs`, `Coupa POs`) stores its key column as text; XLOOKUP/VLOOKUP/Match
+never coerce a numeric key to match a text value, so a tracker identifier cell that lands as a
+Number silently breaks every formula keyed on it. See
+`notes/identifier-types-investigation.md` for the live-workbook evidence and root cause.
+
+`NormalizeIdentifierColumnsOn(ws, cols)` sweeps a sheet/column list, sets `NumberFormat = "@"`
+before rewriting a cell, skips formula cells outright, and leaves an already-normalized text
+cell untouched to keep co-author writes minimal. It finds each column's last row by reading the
+whole `UsedRange` extent and scanning for the last non-blank cell in memory, because both
+`End(xlUp)` and `Find` walk visible cells only and would miss a row an AutoFilter is hiding —
+the same trap `MirrorInvoiceBlock.vb` documents. It never raises and never shows a dialog: on
+error it returns whatever it already normalized.
+
+`NormalizeIdentifierColumns(announce, manageProtection)` is the entry point Refresh calls: it
+resolves the tracker sheet via `TenantSheetName("tracker")` and the columns via
+`TenantIdentifierColumns()`, mapping each through `TenantColLetter`. **Every tenant that stacks
+core must declare `TenantIdentifierColumns()`** (ADR-0003) — an empty array is a valid,
+explicit no-op for a tenant that has none configured yet. `manageProtection` follows
+`ConvertStoreNumbers`'s convention exactly, and each `Refresh` passes it the same way.
+
 ## The fiscal calendar
 
 `FiscalCalendar.vb` computes Nordstrom's 4-5-4 retail fiscal calendar -- fiscal year
