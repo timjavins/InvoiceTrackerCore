@@ -143,6 +143,11 @@ Public Sub LookupReqs(Optional ByVal announce As Boolean = True, _
         End If
     Next i
 
+    ' Set text format before assigning: on a General cell, writing a numeric-looking value
+    ' (e.g. a REQ # copied straight from Coupa Reqs) re-numericizes it, exactly as if a person
+    ' had typed it in -- silently breaking every XLOOKUP keyed on this column against the
+    ' Coupa sheets, whose keys are text. Matches CopyPaymentNums.vb and UpdateSearchValues.
+    wsTracker.Range(colTrackerReq & "2:" & colTrackerReq & lastRow).NumberFormat = "@"
     wsTracker.Range(colTrackerReq & "2:" & colTrackerReq & lastRow).Value = trackerReqNums
 
     If manageProtection Then ProtectSheet
