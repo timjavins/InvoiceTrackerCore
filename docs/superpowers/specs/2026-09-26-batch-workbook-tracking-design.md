@@ -1,6 +1,6 @@
 # Batch/Workbook Tracking, Monitoring-Aware Duplicate Check, All-Years Mirror — Design
 
-Status: Features 1–2 approved; Feature 3 revised after review, pending user review
+Status: implemented (see plan and tickets.md)
 Repos touched: `InvoiceTrackerCore` (shared), `SecuritasAutomation` (variant)
 Not touched: `JCI-invoice-tracker` (Feature 1 tenant config additions only; no behavior change)
 

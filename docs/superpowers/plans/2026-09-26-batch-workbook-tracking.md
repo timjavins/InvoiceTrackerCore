@@ -1746,6 +1746,8 @@ Point the path at a copy **before** testing. Temporarily edit `TenantAllYearsWor
 5. Open the archive copy normally in a **second** Excel instance, so that instance holds the lock. Then run the sync from the first instance. Expect the "opened read-only" warning, and no change to the copy.
 6. Clear `Helper!E6` and run `AddNewBills`. Expect the staleness warning first, then a sync at the end.
 7. Run `UpdateCoupaData` with an orders export. Expect a silent sync, with `Helper!E6` updated.
+8. Confirm the archive copy opened by the sync has AutoSave off (File > the AutoSave toggle), and that its Invoices sheet password matches TenantSheetPassword() ("Formulas").
+9. Open the archive copy yourself, edit a cell without saving, then run SyncAllYearsNow. Expect the "open with unsaved changes" refusal and no change to the copy.
 
 Then **restore** the real SharePoint path in `TenantAllYearsWorkbookPath()` and rebuild the stack. Check it with `git diff TenantConfig.vb`: the only change should be the Task 8 Step 1 addition.
 
