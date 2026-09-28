@@ -73,12 +73,23 @@ try {
 } finally { Remove-VbaHost -VbaHost $vba | Out-Null }
 
 # --- Sheet sweep: ordinary (unfiltered) fixture -------------------------------------------
+# A numeric-looking string ("1166552") needs NumberFormat = "@" set *before* the value write,
+# or Excel re-numericizes it on assignment, exactly the trap guarantee #5 exists to avoid --
+# that pre-step is fixture setup, not a mask. A non-numeric string (a WARRANTY-style marker)
+# is never re-numericized regardless of format, so it is deliberately left with whatever
+# format the cell already has (General, for a fresh fixture cell) instead of forcing "@" --
+# forcing "@" on every string cell up front would make a spurious sweep-caused re-set to "@"
+# indistinguishable from the fixture's own setup, which is exactly the gap that let a real
+# regression (a blanket NumberFormat write over cells that never needed one) through review
+# undetected. Blank cells are left with their default format for the same reason.
 function Set-Cell($ws, [int]$row, [int]$col, $value, [switch]$AsFormula) {
     $cell = $ws.Cells($row, $col)
     if ($AsFormula) {
         $cell.Formula = $value
     } elseif ($value -is [string]) {
-        $cell.NumberFormat = '@'
+        if ($value -match '^\s*-?\d+(\.\d+)?\s*$') {
+            $cell.NumberFormat = '@'
+        }
         $cell.Value2 = $value
     } elseif ($null -eq $value) {
         $cell.ClearContents() | Out-Null
@@ -98,6 +109,19 @@ try {
     Set-Cell $ws 4 1 'WARRANTY'       # marker text: already normalized, must be untouched
     Set-Cell $ws 5 1 $null            # blank: must stay blank
     Set-Cell $ws 6 1 '1166552'        # already text and already trimmed: not rewritten
+
+    # A deliberately wrong pre-existing format on the already-normalized text cell -- one no
+    # real sweep output would ever produce -- proves the sweep issues no format write at all
+    # for a cell whose value doesn't change, not merely that the value survives. Set-Cell's own
+    # "@" pre-step (needed to store '1166552' as text at all) already ran above; this overrides
+    # it afterward, which does not turn the stored string back into a number (verified directly:
+    # a NumberFormat change alone never coerces existing cell content).
+    $ws.Cells(6,1).NumberFormat = '0.00'
+    # WARRANTY (row 4) and the blank (row 5) were never given "@" by Set-Cell in the first
+    # place, so they are still whatever a fresh cell defaults to -- also a value the sweep
+    # itself would never legitimately write.
+    $warrantyFormatBefore = $ws.Cells(4,1).NumberFormat
+    $blankFormatBefore = $ws.Cells(5,1).NumberFormat
 
     # Column C: same shapes, to prove multiple columns in one call are all swept
     Set-Cell $ws 1 3 'ID2'
@@ -121,6 +145,15 @@ try {
     Assert-Equal 'WARRANTY' ($ws.Cells(4,1).Value2) -Because 'a marker string is left alone'
     Assert-Equal '' ([string]$ws.Cells(5,1).Value2) -Because 'a blank cell stays blank'
     Assert-Equal '1166552' ($ws.Cells(6,1).Value2) -Because 'an already-normalized text cell is not rewritten'
+
+    # Proving no write happened at all, not just that the value round-tripped unchanged: each
+    # of these cells' deliberately-wrong pre-existing format must still be exactly what it was
+    # planted as above -- a real sweep write (NicWriteRuns/NicWritePerCell) always sets "@"
+    # first, so any of these being "@" now would mean the cell was written despite not needing
+    # a change.
+    Assert-Equal '0.00' ($ws.Cells(6,1).NumberFormat) -Because 'an already-normalized text cell gets no format write either'
+    Assert-Equal $warrantyFormatBefore ($ws.Cells(4,1).NumberFormat) -Because 'a marker string gets no format write'
+    Assert-Equal $blankFormatBefore ($ws.Cells(5,1).NumberFormat) -Because 'a blank cell gets no format write'
 
     Assert-Equal 'String' ($ws.Cells(2,3).Value2.GetType().Name) -Because 'C2 becomes text too -- multiple columns are swept'
     Assert-Equal '555555' ($ws.Cells(2,3).Value2) -Because 'C2 keeps its digits exactly'
@@ -169,6 +202,13 @@ try {
 # --- Sheet sweep: larger scale, mixed shapes, and a timing regression guard ---------------
 # A generous wall-clock ceiling here is a regression guard against reintroducing a per-cell
 # (O(n) COM round trips) sweep by accident -- not a tight performance benchmark.
+#
+# This fixture has zero formula cells, which is the specific shape that once took a blanket
+# NumberFormat="@" + Value=wholeArray write over the *entire* range -- including every
+# already-clean-text and blank row that never needed a write at all. Planting a deliberately
+# wrong pre-existing format on one of each and asserting it survives the sweep unchanged is
+# what catches that regression; checking only the post-sweep *value* does not, since the value
+# round-trips to the same thing either way.
 $vba = New-VbaHost -SourceFiles @($src, $driver)
 try {
     $ws = $vba.Workbook.Worksheets(1)
@@ -185,6 +225,13 @@ try {
         }
     }
 
+    # Row 3 (i=1) is already-clean text ("1"); Set-Cell had to set "@" to store it as text at
+    # all, so override it afterward to a format no legitimate sweep output would produce.
+    # Row 4 (i=2) is blank and was never given "@" in the first place -- record its natural
+    # default so the after-sweep check isn't just hardcoding "General".
+    $ws.Cells(3,1).NumberFormat = '0.00'
+    $blankFormatBefore = $ws.Cells(4,1).NumberFormat
+
     $sw = [System.Diagnostics.Stopwatch]::StartNew()
     $count = Invoke-VbaFunction -VbaHost $vba -Name 'T_Sweep' -Arguments @('A') -TimeoutSeconds 30
     $sw.Stop()
@@ -196,6 +243,9 @@ try {
     Assert-Equal '1000000' ($ws.Cells(2,1).Value2) -Because 'the first numeric row keeps its digits exactly'
     Assert-Equal '1' ($ws.Cells(3,1).Value2) -Because 'an already-clean text row is untouched in value'
     Assert-Equal '' ([string]$ws.Cells(4,1).Value2) -Because 'a blank row stays blank'
+
+    Assert-Equal '0.00' ($ws.Cells(3,1).NumberFormat) -Because 'an already-clean text row gets no format write in the no-formula bulk path either'
+    Assert-Equal $blankFormatBefore ($ws.Cells(4,1).NumberFormat) -Because 'a blank row gets no format write in the no-formula bulk path either'
 
     $tailIndex = $rowCount - 1
     while (($tailIndex % 3) -ne 0) { $tailIndex-- }
