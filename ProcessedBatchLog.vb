@@ -36,13 +36,17 @@ Public Sub RecordProcessedBatch(ByVal wb As Workbook, ByVal hash As String, _
     Set ws = PblEnsureSheet(wb)
     r = ws.Cells(ws.Rows.Count, 1).End(xlUp).Row + 1
 
-    ws.Cells(r, 1).NumberFormat = "@"
-    ws.Cells(r, 1).Value = LCase$(Trim$(hash))
+    ' Hash (column A) is written LAST, after B-F. A failure partway through this sub then
+    ' never leaves a hash on the sheet marking the file processed -- IsAlreadyProcessed and
+    ' PblFindRow only match on column A, so a row with B-F set but no hash yet is invisible
+    ' to them, exactly as if this sub had not run at all.
     ws.Cells(r, 2).Value = sourceFile
     ws.Cells(r, 3).Value = tenant
     ws.Cells(r, 4).Value = Now
     ws.Cells(r, 5).Value = rowsAdded
     ws.Cells(r, 6).Value = rowsSkipped
+    ws.Cells(r, 1).NumberFormat = "@"
+    ws.Cells(r, 1).Value = LCase$(Trim$(hash))
 End Sub
 
 Private Function PblFindRow(ByVal wb As Workbook, ByVal hash As String) As Long
