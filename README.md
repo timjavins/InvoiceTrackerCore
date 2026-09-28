@@ -252,7 +252,8 @@ those whose trailing `Source File` tag is in `ownedTags`, with a values-only cop
 sheet, and never touches any other row. It refuses, writing nothing and returning `-1`, when:
 - the headers differ, or the archive has a column after `Source File`;
 - the source has no `BILL CODE` header;
-- the source is empty.
+- the source is empty;
+- either sheet has an active filter (`FilterMode = True`) -- see "Filters" below.
 
 A `-1` from one of those refusals means the archive is untouched, but `-1` can also come from an
 error raised mid-way through the delete-then-append (an error during the row deletes or the
@@ -265,6 +266,24 @@ Owned rows are deleted and re-appended rather than the sheet being rewritten, be
 a legacy text value such as `0175` back into a General cell converts it to a number. The
 Securitas `SyncAllYears` wrapper supplies the SharePoint side; see the batch-tracking spec,
 section 3.
+
+**Filters.** A sheet with an active filter (`FilterMode = True`, meaning rows are currently
+hidden by filter criteria) is refused outright, before any delete -- neither sheet is read,
+deleted, or written. A filter is never cleared or changed to work around this: the archive is
+shared, so its view must stay exactly as the caller left it.
+
+That refusal exists because the more surgical fix was tried first and measured, not assumed.
+`End(xlUp)` walks like Ctrl+Up and returns the last *visible* row on a filtered sheet, which
+would truncate a filtered source or leave filtered-out legacy rows in the archive unreplaced
+(with their replacements appended on top of them). Swapping in
+`Columns(col).Find(What:="*", ..., SearchDirection:=xlPrevious)` looked like the fix, on the
+assumption that `Find` walks actual cell order and ignores hidden rows. Testing against a real
+AutoFilter (`tests/Test-MirrorInvoiceBlock.ps1`) showed that assumption is wrong: `Find` skips
+rows an AutoFilter is hiding just like `End(xlUp)` does, so it reproduced the same corruption
+instead of fixing it. (`Find` *does* find a row hidden manually, via Format > Hide, unlike
+`End(xlUp)` -- which is why `MibLastRow` still uses `Find` rather than reverting, even though it
+cannot be trusted alone under an AutoFilter.) Refusing on `FilterMode` is the safe alternative
+to a fix that only looks correct.
 
 ## Design docs
 

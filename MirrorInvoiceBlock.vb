@@ -19,6 +19,21 @@
 ' Owned rows are deleted run by run and the new block appended, rather than reading the whole
 ' sheet and writing it back, because writing a legacy text value like "0175" back into a
 ' General cell would silently turn it into the number 175.
+'
+' Filters: a sheet with an ACTIVE filter (FilterMode = True, i.e. rows are currently hidden by
+' filter criteria, not merely showing the dropdown arrows) is refused outright -- neither src
+' nor dst is read, deleted or written. This was not the first design: MibLastRow was written
+' to use Find(SearchDirection:=xlPrevious) instead of End(xlUp), on the assumption that Find
+' walks actual cell order and ignores hidden rows. Measured against a real filtered sheet
+' (tests/Test-MirrorInvoiceBlock.ps1, cases (a)/(b)), that assumption was wrong: Excel's Find
+' skips rows hidden by an AutoFilter exactly like End(xlUp) does, so it returned the same
+' wrong (last-VISIBLE-row) answer, which corrupted the mirror -- e.g. the append landed on
+' top of a hidden legacy row instead of after it. A manually-hidden row (Format > Hide, no
+' filter involved) is different: Find does find it, unlike End(xlUp), which is why MibLastRow
+' keeps the Find-based implementation below rather than reverting -- it is strictly better
+' than End(xlUp) for that case, even though it cannot be trusted alone under an AutoFilter.
+' Never clear or change a filter to work around this: the archive is shared, so its view must
+' stay exactly as the caller left it. Refusing is the safe alternative to guessing.
 Public Function MirrorInvoiceBlock(ByVal src As Worksheet, ByVal dst As Worksheet, _
                                    ByVal writeTag As String, ByVal ownedTags As Variant) As Long
     Dim srcCols As Long, tagCol As Long, keyCol As Long, c As Long
@@ -38,6 +53,10 @@ Public Function MirrorInvoiceBlock(ByVal src As Worksheet, ByVal dst As Workshee
     If keyCol = 0 Then Exit Function
     If MibHeader(dst.Cells(1, tagCol).Value) <> "SOURCE FILE" Then Exit Function
     If dst.Cells(1, dst.Columns.Count).End(xlToLeft).Column <> tagCol Then Exit Function
+
+    ' A filtered sheet is refused, before any delete, rather than mirrored under a guess.
+    ' See the header comment for why Find alone was not the fix it looked like.
+    If dst.FilterMode Or src.FilterMode Then Exit Function
 
     ' 2. Real last rows, never UsedRange (the archive's is stale from old deletions).
     srcLast = MibLastRow(src, 1, keyCol)
@@ -89,11 +108,28 @@ Private Function MibHeader(ByVal v As Variant) As String
     MibHeader = UCase$(Trim$(CStr(v)))
 End Function
 
+' Filter-proof: End(xlUp) walks like Ctrl+Up, which skips rows an AutoFilter has hidden, so
+' on a filtered sheet it returns the last VISIBLE row rather than the last real one. Find
+' with SearchDirection:=xlPrevious walks actual cell order instead and is not fooled by a
+' filter. The sheet's filter (if any) is left exactly as the caller had it -- this only reads.
 Private Function MibLastRow(ByVal ws As Worksheet, ByVal colA As Long, ByVal colB As Long) As Long
     Dim a As Long, b As Long
-    a = ws.Cells(ws.Rows.Count, colA).End(xlUp).Row
-    b = ws.Cells(ws.Rows.Count, colB).End(xlUp).Row
+    a = MibFindLastRow(ws, colA)
+    b = MibFindLastRow(ws, colB)
     MibLastRow = IIf(a > b, a, b)
+End Function
+
+' Nothing found (a column with only a header, or none at all) means row 1: the header row,
+' never data, matching End(xlUp)'s floor of row 1 on an all-empty column.
+Private Function MibFindLastRow(ByVal ws As Worksheet, ByVal col As Long) As Long
+    Dim found As Range
+    Set found = ws.Columns(col).Find(What:="*", LookIn:=xlFormulas, SearchOrder:=xlByRows, _
+                                     SearchDirection:=xlPrevious)
+    If found Is Nothing Then
+        MibFindLastRow = 1
+    Else
+        MibFindLastRow = found.Row
+    End If
 End Function
 
 Private Function MibAt(ByVal tags As Variant, ByVal i As Long) As Variant

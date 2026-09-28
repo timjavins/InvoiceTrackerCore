@@ -110,5 +110,83 @@ try {
     Assert-Equal -1 ($vba.Workbook.T_Mirror()) -Because 'MirrorInvoiceBlock compiles and runs inside ThisWorkbook'
 } finally { Remove-VbaHost -VbaHost $vba | Out-Null }
 
+# --- C1: filter-proofing -----------------------------------------------------------------
+# End(xlUp) walks like Ctrl+Up and returns the last VISIBLE row on a filtered sheet. The first
+# fix tried was Find(SearchDirection:=xlPrevious) instead, on the assumption that Find ignores
+# hidden rows. Measured directly against a real AutoFilter (see the header comment and the
+# report for the raw evidence), Find turned out to skip filter-hidden rows exactly like
+# End(xlUp) -- e.g. case (a) below, run against the Find-only version, put the append on top
+# of a hidden legacy row instead of after it. So MirrorInvoiceBlock instead refuses outright
+# (-1, nothing written) whenever either sheet has FilterMode = True. These two cases prove the
+# refusal: a fixture where the OLD End(xlUp)/Find approach would truncate or corrupt the
+# mirror instead now returns -1 having touched nothing.
+
+# (a) dst filtered: an owned row interleaved (hidden) and a trailing legacy row (hidden) both
+# sit below the last row visible under the filter -- exactly the shape that used to make the
+# append clobber the hidden legacy row. The mirror must refuse instead.
+$vba = New-VbaHost -SourceFiles @($src, $driver)
+try {
+    $s = New-Sheets $vba.Workbook
+    $d = $s.Dst
+
+    Set-Row $s.Src 1 @('STORE #', ' BILL CODE ', ' TOTAL ', 'NOTES')
+    Set-Row $s.Src 2 @('0003', 'M1', 10, 'store a')
+    Set-Row $s.Src 3 @('0071', 'M1', 20, 'store b')
+
+    Set-Row $d 1 @('STORE #', ' BILL CODE ', ' TOTAL ', 'NOTES', 'Source File')
+    Set-Row $d 2 @('0175', 'L1', 1, 'legacy one', '2025:Invoices')
+    Set-Row $d 3 @('0999', 'M1', 60, 'collapsed by migration', '2026:Invoices')   # owned, interleaved, hidden
+    Set-Row $d 4 @('0176', 'L2', 2, 'PAID', '2025:Invoices')                     # last row VISIBLE under filter
+    Set-Row $d 5 @('0177', 'L3', 3, 'PAID', 'RootNoYear:Invoices')               # hidden, AFTER the last visible row
+
+    # Show only rows tagged 2025:Invoices; this hides row 3 (owned) and row 5 (trailing legacy).
+    $d.Range($d.Cells(1,1), $d.Cells(5,5)).AutoFilter(5, '2025:Invoices') | Out-Null
+
+    Assert-Equal $true $d.FilterMode -Because 'the fixture actually has an active filter'
+    Assert-Equal $true $d.Rows(5).Hidden -Because 'the trailing legacy row starts out hidden by the filter'
+
+    $result = Invoke-VbaFunction -VbaHost $vba -Name 'T_Mirror' -TimeoutSeconds 60
+    Assert-Equal -1 $result -Because 'a filtered dst is refused rather than mirrored under a guess'
+
+    Assert-Equal $true $d.FilterMode -Because 'the refusal never clears or changes the filter'
+    Assert-Equal '=2025:Invoices' ($d.AutoFilter.Filters.Item(5).Criteria1) -Because 'the filter criteria is untouched'
+
+    Assert-Equal 'L1' ($d.Cells(2,2).Value2) -Because 'row 2 is untouched'
+    Assert-Equal 'M1' ($d.Cells(3,2).Value2) -Because 'the owned row is untouched -- nothing was deleted'
+    Assert-Equal 'L2' ($d.Cells(4,2).Value2) -Because 'row 4 is untouched -- rows did not shift'
+    Assert-Equal 'PAID' ($d.Cells(4,4).Value2) -Because 'its PAID note is untouched'
+    Assert-Equal 'L3' ($d.Cells(5,2).Value2) -Because 'the hidden trailing legacy row is untouched'
+    Assert-Equal 'PAID' ($d.Cells(5,4).Value2) -Because 'the hidden legacy row keeps its own hand-set PAID'
+    Assert-Equal $true $d.Rows(5).Hidden -Because 'still hidden by the filter -- nothing about it changed'
+    Assert-Equal '' ([string]$d.Cells(6,5).Value2) -Because 'nothing was appended at all'
+} finally { Remove-VbaHost -VbaHost $vba | Out-Null }
+
+# (b) src filtered: its last data row is hidden -- exactly the shape that used to make the
+# mirror silently drop that row. The mirror must refuse instead of copying a truncated source.
+$vba = New-VbaHost -SourceFiles @($src, $driver)
+try {
+    $s = New-Sheets $vba.Workbook
+    $d = $s.Dst
+
+    Set-Row $s.Src 1 @('STORE #', ' BILL CODE ', ' TOTAL ', 'NOTES')
+    Set-Row $s.Src 2 @('0003', 'M1', 10, 'store a')
+    Set-Row $s.Src 3 @('0071', 'M1', 20, 'store b')   # will be hidden -- last data row
+
+    Set-Row $d 1 @('STORE #', ' BILL CODE ', ' TOTAL ', 'NOTES', 'Source File')
+    Set-Row $d 2 @('0175', 'L1', 1, 'legacy one', 'Other:Invoices')
+
+    # Show only 'store a'; this hides row 3, the source's last data row.
+    $s.Src.Range($s.Src.Cells(1,1), $s.Src.Cells(3,4)).AutoFilter(4, 'store a') | Out-Null
+    Assert-Equal $true $s.Src.FilterMode -Because 'the fixture actually has an active filter'
+    Assert-Equal $true $s.Src.Rows(3).Hidden -Because 'the last source row starts out hidden'
+
+    $result = Invoke-VbaFunction -VbaHost $vba -Name 'T_Mirror' -TimeoutSeconds 60
+    Assert-Equal -1 $result -Because 'a filtered source is refused rather than mirrored truncated'
+
+    Assert-Equal $true $s.Src.FilterMode -Because 'the refusal never clears or changes the source filter either'
+    Assert-Equal 'L1' ($d.Cells(2,2).Value2) -Because 'the archive is completely untouched'
+    Assert-Equal '' ([string]$d.Cells(3,2).Value2) -Because 'nothing was appended'
+} finally { Remove-VbaHost -VbaHost $vba | Out-Null }
+
 Remove-Item $driver -Force -ErrorAction SilentlyContinue
 Write-AssertSummary
