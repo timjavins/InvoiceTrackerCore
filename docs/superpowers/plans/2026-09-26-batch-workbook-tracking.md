@@ -1364,6 +1364,12 @@ The user runs these steps. They can't be automated here: the stack is pasted int
 6. Take a repair file whose bill codes are already in the tracker (for example, copy three existing rows into a new file). Expect every row skipped as `already-processed`, and "Added 0 row(s)".
 7. Unhide the `Processed Batches` sheet: it should have one row per successful run.
 
+Note for this and every later verification step that runs `AddNewBills` (which syncs to
+All-Years on success): this scratch copy of the working book only ever syncs to an archive
+sitting in ITS OWN folder (Task 8, ruling I1) -- there is no archive there yet at this point in
+the plan, so the sync fails safe with a warning, and that warning is expected here, not a
+regression.
+
 Record what was run and what happened in the commit body.
 
 - [ ] **Step 8: Commit**
@@ -1502,7 +1508,7 @@ git commit -m "feat(AddNewBills): refuse already-processed files"
   - `Public Function SyncAllYears(Optional ByVal announce As Boolean = False) As Boolean`
   - `Public Sub SyncAllYearsNow()` (the manual macro)
   - `Public Sub WarnIfAllYearsStale()`
-  - `TenantAllYearsWorkbookPath()`, `TenantAllYearsSyncStampCell()`, `TenantAllYearsStaleDays()`, `TenantAllYearsOwnedTags()`, `TenantAllYearsWriteTag()`
+  - `TenantAllYearsWorkbookName()`, `TenantAllYearsSyncStampCell()`, `TenantAllYearsStaleDays()`, `TenantAllYearsOwnedTags()`, `TenantAllYearsWriteTag()`
 
 - [ ] **Step 1: Add the tenant accessors**
 
@@ -1512,12 +1518,13 @@ In `SecuritasAutomation/TenantConfig.vb`, add after the batch-tracking block fro
 ' --- All-Years archive ----------------------------------------------------------
 '
 ' Read by this variant's SyncAllYears.vb only, not by core, so no other tenant has to declare
-' these. The archive is a separate cloud workbook; see the batch-tracking spec, section 3.
+' these. The archive is a separate cloud workbook that lives in the SAME FOLDER as this
+' working book; see the batch-tracking spec, section 3, and ruling I1 in the final-fix report.
 
-Public Function TenantAllYearsWorkbookPath() As String
-    TenantAllYearsWorkbookPath = "https://nordstrom.sharepoint.com/sites/NordstromAssetProtectionHub/" & _
-        "AP Restricted/AP Ops Tech Internal/Expenses/SECURITAS/" & _
-        "Securitas All-Years Invoices - Consolidated.xlsm"
+' Name only, not a path -- SyncAllYears derives the full path from ThisWorkbook.Path, so a
+' scratch copy of the working book only ever reaches an archive in ITS OWN folder.
+Public Function TenantAllYearsWorkbookName() As String
+    TenantAllYearsWorkbookName = "Securitas All-Years Invoices - Consolidated.xlsm"
 End Function
 
 ' Helper cell stamped with the last successful sync. E2-E5 already hold Coupa import stamps.
@@ -1575,7 +1582,7 @@ Public Function SyncAllYears(Optional ByVal announce As Boolean = False) As Bool
     Dim paused As Boolean
     Dim unprotected As Boolean
 
-    path = TenantAllYearsWorkbookPath()
+    path = AyArchivePath()   ' joins ThisWorkbook.Path with TenantAllYearsWorkbookName() -- see ruling I1
     If Len(path) = 0 Then Exit Function
 
     priorEvents = Application.EnableEvents
@@ -1734,7 +1741,24 @@ Expected: exit 0.
 
 - [ ] **Step 5: Verify by hand against copies (the user drives this)**
 
-Point the path at a copy **before** testing. Temporarily edit `TenantAllYearsWorkbookPath()` to return a local copy's path, for example `C:\Users\p4bn\Documents\scratch\Securitas All-Years Invoices - Consolidated.xlsm`, and rebuild the stack. The live archive must not be the test target.
+No path swap is needed, and none should be made: `TenantAllYearsWorkbookName()` is a bare file
+name, and `SyncAllYears` derives the full path from `ThisWorkbook.Path`. So put the archive
+copy in the SAME FOLDER as the scratch working-book copy from Task 6 -- that alone makes the
+scratch working book resolve to the scratch archive, and makes it impossible for either copy to
+reach the live shared archive by accident. Nothing in `TenantConfig.vb` needs editing or
+restoring before or after this step.
+
+Before checking anything else:
+- [ ] the archive copy's tracker sheet is actually named `Invoices` (`TenantSheetName("tracker")`) --
+      a rename here fails the header check silently (`MirrorInvoiceBlock` returns -1);
+- [ ] `Helper!D6` on the scratch working book is empty -- it was empty on 2026-09-26, and
+      `TenantAllYearsSyncStampCell()` (`E6`) sits next to it; a leftover value in D6 would be
+      overwritten unnoticed by `AyStamp`'s label write to `E6`'s Offset(0, -1).
+- [ ] before running this against anything that could become the LIVE sync, count `PAID` values
+      in the archive's rows tagged `2026Model:Invoices` -- these rows are owned and get replaced
+      wholesale on the first sync. If any are found, copy them into the working book first (see
+      "Why PAID matters" in the spec); once replaced, that hand-investigation record is gone.
+
 1. On the scratch copy of the working book from Task 6, paste the stack and compile.
 2. Run `SyncAllYearsNow`. Expect "N row(s) mirrored", with N equal to the working book's data rows.
 3. In the archive copy:
@@ -1748,8 +1772,6 @@ Point the path at a copy **before** testing. Temporarily edit `TenantAllYearsWor
 7. Run `UpdateCoupaData` with an orders export. Expect a silent sync, with `Helper!E6` updated.
 8. Confirm the archive copy opened by the sync has AutoSave off (File > the AutoSave toggle), and that its Invoices sheet password matches TenantSheetPassword() ("Formulas").
 9. Open the archive copy yourself, edit a cell without saving, then run SyncAllYearsNow. Expect the "open with unsaved changes" refusal and no change to the copy.
-
-Then **restore** the real SharePoint path in `TenantAllYearsWorkbookPath()` and rebuild the stack. Check it with `git diff TenantConfig.vb`: the only change should be the Task 8 Step 1 addition.
 
 - [ ] **Step 6: Commit**
 

@@ -1,8 +1,11 @@
 # Batch/Workbook Tracking, Monitoring-Aware Duplicate Check, All-Years Mirror — Design
 
 Status: implemented (see plan and tickets.md)
-Repos touched: `InvoiceTrackerCore` (shared), `SecuritasAutomation` (variant)
-Not touched: `JCI-invoice-tracker` (Feature 1 tenant config additions only; no behavior change)
+Repos touched: `InvoiceTrackerCore` (shared), `SecuritasAutomation` (variant), `JCI-invoice-tracker` (variant, partial)
+`JCI-invoice-tracker` gets the hash gate/record/move (Feature 1) only, via its own TenantConfig
+declarations and `AddNewBills.vb` changes; it has no All-Years archive (Feature 3) and its
+`MarkDuplicateInvoices` (its analogue of Securitas's monitoring-aware duplicate check, Feature 2)
+is unchanged.
 
 ## Problem
 
@@ -202,10 +205,13 @@ this spec.
 **Securitas wrapper** — `SyncAllYears(Optional announce As Boolean)`, in
 `SecuritasAutomation`:
 
-1. Resolve the path from `TenantAllYearsWorkbookPath()`. If All-Years is
-   already open in this instance, use that copy; otherwise open it with
-   `Application.EnableEvents = False`, because All-Years carries a copy of the
-   stack and its `Workbook_Open` must not fire.
+1. Resolve the path by joining `ThisWorkbook.Path` with `TenantAllYearsWorkbookName()`
+   (`/` for a cloud path, `\` otherwise) -- the archive lives in the same folder as
+   the working book, so this is derived, never a hardcoded location; a scratch
+   copy of the working book then only ever reaches an archive beside itself. If
+   All-Years is already open in this instance, use that copy; otherwise open it
+   with `Application.EnableEvents = False`, because All-Years carries a copy of
+   the stack and its `Workbook_Open` must not fire.
 2. If `wb.ReadOnly`, skip: the file is locked elsewhere, and writes would only
    reach memory.
 3. Call `MirrorInvoiceBlock` with no `MsgBox` or other user prompt between
@@ -303,7 +309,9 @@ Securitas only, read by its `SyncAllYears` wrapper rather than by core, so JCI
 needs no change:
 
 ```
-TenantAllYearsWorkbookPath() As String   ' SharePoint URL of All-Years
+TenantAllYearsWorkbookName() As String   ' e.g. "Securitas All-Years Invoices - Consolidated.xlsm"
+                                          ' (archive lives beside the working book; SyncAllYears
+                                          ' derives the full path from ThisWorkbook.Path)
 TenantAllYearsSyncStampCell() As String  ' "E6" on Helper (E2-E5 hold import stamps)
 TenantAllYearsStaleDays() As Long        ' 3
 TenantAllYearsOwnedTags() As Variant     ' Array("2026:Invoices", "2026Model:Invoices")
