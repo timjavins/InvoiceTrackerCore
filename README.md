@@ -328,6 +328,33 @@ instead of fixing it. (`Find` *does* find a row hidden manually, via Format > Hi
 cannot be trusted alone under an AutoFilter.) Refusing on `FilterMode` is the safe alternative
 to a fix that only looks correct.
 
+## Excluding a vendor's summary row from an import
+
+`LastRealDataRow.vb` finds the real last data row of an imported bill export, excluding a
+trailing "Grand Total"/"Subtotal" row a vendor's export tool appended — without assuming that
+row is blank in any particular column. Two confirmed shapes already broke a single fixed-column
+anchor: one export left `STORE #` blank and put `Grand Total` in `BILL CODE`; a later one puts
+`Grand Total` directly in `STORE #` and leaves `BILL CODE` blank instead. There is no column
+that is reliably blank on every vendor's summary row, so this judges the row's *shape* instead.
+
+`RowValuesLookLikeSummary(rowValues, maxAmountInBlock)` is the pure, testable core: three
+independently weak signals — a cell whose whole trimmed text is a label like `Total` or
+`Grand Total` (an exact match, not a substring, so a `TRANSACTION DETAILS` note that happens to
+contain "totaled" doesn't trip it); the row is mostly blank; the row holds a dollar amount at
+least as large as the largest amount anywhere else in the scanned block (true by construction
+for a genuine grand total, and essentially never true of a single real line item). Any two
+signals together call it a summary row; one alone does not, so a real row is never misclassified
+just for being sparse, or for happening to hold this batch's single largest amount, or for a
+free-text field containing "total" somewhere.
+
+`LastRealDataRow(ws, rawLastRow, headerRow, firstCol, lastCol)` (worksheet) and
+`LastRealDataRowInArray(sourceData, rawLastRow, headerRow, firstCol, lastCol)` (an already-loaded
+2D array, e.g. from `LoadCoupaSourceData`) both walk upward from a caller's own coarse starting
+guess, skipping a trailing blank row or one that looks like a summary row, and return the first
+row that is neither. Both variants' `AddNewBills` use these instead of anchoring on a specific
+column (`STORE #`, `BILL CODE`, `Ship To Site`, `Invoice`, all tried and each broken by some
+vendor's export at one point or another).
+
 ## Design docs
 
 Architecture decisions and the domain glossary live in `SecuritasAutomation`:
