@@ -252,10 +252,13 @@ Private Sub NicWritePerCell(ByVal ws As Worksheet, ByVal colLetter As String, _
 End Sub
 
 ' Writes only maximal contiguous runs of rows that are both non-formula and actually changed,
-' one bulk NumberFormat/Value write per run -- used only when a formula cell is mixed into the
-' column, so the whole-range write in NicSweepColumn would otherwise wipe it. rowIsFormula,
-' rowNeedsWrite, and targetValues are 1-based over rowCount rows, where array row i is sheet
-' row i + 1.
+' one bulk NumberFormat/Value write per run. This is NicSweepColumn's only non-filtered writer:
+' on a first, fully-unnormalized sweep every row needs writing, so this collapses to one run and
+' one write across the whole column; on a later sweep, where most cells are already normalized,
+' it shrinks to only the runs that changed. If a formula cell happens to be mixed into the
+' column, it is simply excluded from every run, so it is never overwritten either way.
+' rowIsFormula, rowNeedsWrite, and targetValues are 1-based over rowCount rows, where array
+' row i is sheet row i + 1.
 Private Sub NicWriteRuns(ByVal ws As Worksheet, ByVal colLetter As String, _
                          ByRef rowIsFormula() As Boolean, ByRef rowNeedsWrite() As Boolean, _
                          ByRef targetValues() As Variant, ByVal rowCount As Long)
