@@ -56,24 +56,59 @@ Public Sub ExtractInvApprovalDate(Optional ByVal announce As Boolean = True, _
         UnprotectSheet
     End If
 
+    ' Nothing below the header row -- ColumnValues would otherwise hand back Empty (lastRow <
+    ' firstRow), and UBound on that raises a type mismatch rather than the no-op the original
+    ' per-row loop (For i = 2 To lastRowInv, zero iterations) fell into.
+    If lastRowInv < 2 Then
+        If manageProtection Then ProtectSheet
+        RestoreThinking
+        If announce Then MsgBox "0 approval date(s) extracted from invoice history logs.", vbInformation
+        Exit Sub
+    End If
+
+    ' Read status and PO once, compute every approval date in memory, then write the whole
+    ' column back in a single operation -- rather than one status read, one PO read and one
+    ' approval-date write per row, which is what a few hundred tracker rows had been costing
+    ' on every Refresh.
     Dim extracted As Long
+    Dim statusArr As Variant, poArr As Variant
+    statusArr = ColumnValues(wsInv, colStatus, 2, lastRowInv)
+    poArr = ColumnValues(wsInv, colPO, 2, lastRowInv)
+
+    Dim resultArr() As Variant
+    ReDim resultArr(1 To UBound(statusArr, 1), 1 To 1)
+
     Dim i As Long
-    For i = 2 To lastRowInv
-        If CStr(wsInv.Cells(i, colStatus).Value) = "Approved" Then
+    For i = 1 To UBound(statusArr, 1)
+        If SafeText(statusArr(i, 1)) = "Approved" Then
             Dim approvalDate As String
-            approvalDate = FindApprovalDateForPO(wsCoupaInvs, _
-                                                 CStr(wsInv.Cells(i, colPO).Value), _
+            approvalDate = FindApprovalDateForPO(wsCoupaInvs, SafeText(poArr(i, 1)), _
                                                  COUPA_PO_COL, COUPA_HISTORY_COL, regex)
 
             If Len(approvalDate) > 0 Then
-                wsInv.Cells(i, colApproval).Value = approvalDate
+                resultArr(i, 1) = approvalDate
                 extracted = extracted + 1
+            Else
+                resultArr(i, 1) = vbNullString
             End If
         Else
             ' Not approved: clear any date left from a previous run.
-            wsInv.Cells(i, colApproval).Value = vbNullString
+            resultArr(i, 1) = vbNullString
         End If
     Next i
+
+    ' lastRowInv..2 is the tracker's whole existing row range, which a user-applied AutoFilter
+    ' can hide rows within -- unlike the append-only write loops elsewhere in this codebase, this
+    ' is exactly the hazard MirrorInvoiceBlock refuses outright and NormalizeIdentifierColumnsOn
+    ' falls back for: an array write spanning a filter-hidden row can misalign values onto the
+    ' wrong VISIBLE rows, not just skip the hidden one. Fall back to the per-cell path here too.
+    If wsInv.FilterMode Then
+        For i = 1 To UBound(statusArr, 1)
+            wsInv.Cells(i + 1, colApproval).Value = resultArr(i, 1)
+        Next i
+    Else
+        wsInv.Range(wsInv.Cells(2, colApproval), wsInv.Cells(lastRowInv, colApproval)).Value = resultArr
+    End If
 
     If manageProtection Then ProtectSheet
 
