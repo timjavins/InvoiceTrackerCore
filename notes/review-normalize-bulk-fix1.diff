@@ -1,0 +1,437 @@
+===== InvoiceTrackerCore 6d1ae16..HEAD (fix round 1)
+diff --git a/NormalizeIdentifierColumns.vb b/NormalizeIdentifierColumns.vb
+index 087fa43..43227ac 100644
+--- a/NormalizeIdentifierColumns.vb
++++ b/NormalizeIdentifierColumns.vb
+@@ -42,32 +42,35 @@ Public Function NormalizeIdentifier(ByVal v As Variant) As Variant
+         Case Else
+             ' Boolean, Date, Object, etc. -- not a shape this column should ever hold; handed
+             ' back unchanged rather than guessed at.
+             NormalizeIdentifier = v
+     End Select
+ End Function
+ 
+ ' Sweeps one or more columns on ws, rewriting every non-formula cell that is not already
+ ' normalized text. cols is an array of column letters (already resolved through
+ ' TenantColLetter by the caller below), so this is testable against any sheet/column shape
+ ' without a tenant workbook.
+ '
+ ' Each column is read in bulk -- one .Value read and one .Formula read over rows 2..lastRow --
+ ' and computed entirely in memory before anything is written back, the same read/compute/write
+ ' shape ConvertStoreNumbers.vb already uses. That turns a ~3500-row column from ~7000 COM round
+-' trips (HasFormula + Value per cell) into two reads and, in the common case where the column
+-' has no formula cells, exactly one bulk write. See NicSweepColumn.
++' trips (HasFormula + Value per cell) into two reads plus one bulk write per contiguous run of
++' rows that actually need a change -- on a first, unnormalized sweep that is the whole column in
++' one write; once most of a column is already normalized, later sweeps write only what changed
++' and nothing else, not even a redundant format touch on a cell that didn't need one. See
++' NicSweepColumn.
+ '
+ ' Returns the count of cells actually changed. Never raises and never shows a dialog -- this
+ ' runs from Refresh, where an unhandled error must not abort the rest of the run, and the test
+ ' harness cannot survive a modal dialog. On error, whatever was already normalized stays
+ ' normalized; the count reflects that partial progress rather than being lost.
+ Public Function NormalizeIdentifierColumnsOn(ByVal ws As Worksheet, ByVal cols As Variant) As Long
+     Dim changed As Long
+     changed = 0
+ 
+     On Error GoTo Done
+ 
+     If ws Is Nothing Then GoTo Done
+     If Not IsArray(cols) Then GoTo Done
+ 
+     ' UsedRange's extent is unaffected by AutoFilter-hidden rows -- only by actual content --
+@@ -98,95 +101,94 @@ Public Function NormalizeIdentifierColumnsOn(ByVal ws As Worksheet, ByVal cols A
+ 
+             If colLastRow >= 2 Then
+                 changed = changed + NicSweepColumn(ws, colLetter, colLastRow, filterActive)
+             End If
+         End If
+     Next c
+ 
+ Done:
+     NormalizeIdentifierColumnsOn = changed
+ End Function
+ 
+ ' Bulk read/compute/write for one column, rows 2..colLastRow. Reads .Value and .Formula once
+ ' each over the whole range, decides in memory which rows are formula cells (never touched,
+ ' per guarantee #1 -- rewriting a formula cell's value would replace the formula with a
+ ' literal) and which non-formula cells actually need a change, then writes back with as few
+-' COM calls as possible:
++' COM calls as possible, in exactly two ways:
+ '   - filterActive (the sheet has an active AutoFilter hiding rows right now): a multi-row
+ '     array write is unsafe in this state -- see NicWritePerCell -- so every changed,
+ '     non-formula row is written one cell at a time, exactly as this module did before this
+ '     rewrite. Rare in a scheduled Refresh, but must stay correct if the user is filtering the
+ '     tracker when it runs.
+-'   - No formula cells and no active filter (the common, currently-only case for every
+-'     configured tenant column): one blanket NumberFormat = "@" plus one blanket Value = array
+-'     over the whole range, exactly ConvertStoreNumbersOn's shape. Cells that don't need a
+-'     value change keep their own current value in the array, so the bulk write doesn't alter
+-'     them.
+-'   - A formula cell mixed into the column, filter not active (rare, never configured today,
+-'     but must stay correct if it ever happens): the whole-range write is unsafe, since
+-'     writing .Value to a range containing a formula cell would wipe that formula. Instead,
+-'     NicWriteRuns writes one bulk NumberFormat/Value per maximal contiguous run of changed,
+-'     non-formula rows, so a long clean stretch still costs one call and a formula cell is
+-'     never in any written range.
++'   - Otherwise (the common case): NicWriteRuns, which writes one bulk NumberFormat/Value per
++'     maximal contiguous run of rows that both need a change and are not a formula. A cell that
++'     doesn't need a value change (already-normalized text, WARRANTY-style markers, blank/
++'     Null/Error) gets no write at all, format or value, which is what keeps an
++'     already-normalized column diff-quiet on a live shared workbook (guarantee #4) -- there is
++'     deliberately no separate "whole range in one shot" branch, because that would write
++'     NumberFormat/Value to every cell in the range including ones that don't need it. On the
++'     first sweep of an unnormalized column, every row needs writing, so the whole column is
++'     one contiguous run and this still collapses to exactly one bulk write -- the performance
++'     win is unchanged for that case. On a later Refresh, once most cells are already
++'     normalized, it naturally shrinks to writing only the runs that actually changed, which is
++'     the guarantee working as designed, not a special case. A formula cell mixed into the
++'     column (rare, never configured today) is simply never marked needsWrite, so it can never
++'     be inside a written range either way.
+ ' Returns the count of cells actually changed (numeric conversions plus string cells whose
+ ' normalized form differs from the raw text).
+ Private Function NicSweepColumn(ByVal ws As Worksheet, ByVal colLetter As String, _
+                                 ByVal lastRow As Long, ByVal filterActive As Boolean) As Long
+     Dim rowCount As Long
+     rowCount = lastRow - 1
+ 
+     Dim targetRange As Range
+     Set targetRange = ws.Range(colLetter & "2:" & colLetter & lastRow)
+ 
+     Dim rawValues As Variant
+     rawValues = targetRange.Value
+ 
+     Dim rawFormulas As Variant
+     rawFormulas = targetRange.Formula
+ 
+     Dim isFormulaRow() As Boolean
+     ReDim isFormulaRow(1 To rowCount)
+ 
+     Dim needsWrite() As Boolean
+     ReDim needsWrite(1 To rowCount)
+ 
+     Dim targetValues() As Variant
+     ReDim targetValues(1 To rowCount, 1 To 1)
+ 
+-    Dim anyFormula As Boolean
+-    anyFormula = False
+-
+     Dim changed As Long
+     changed = 0
+ 
+     Dim r As Long
+     For r = 1 To rowCount
+         Dim rawValue As Variant
+         Dim rawFormula As Variant
+ 
+         ' A single-row range comes back as a bare scalar rather than a 2D array.
+         If rowCount = 1 Then
+             rawValue = rawValues
+             rawFormula = rawFormulas
+         Else
+             rawValue = rawValues(r, 1)
+             rawFormula = rawFormulas(r, 1)
+         End If
+ 
+         If NicIsFormulaText(rawFormula) Then
+             isFormulaRow(r) = True
+-            anyFormula = True
+             targetValues(r, 1) = rawValue
+ 
+         ElseIf IsError(rawValue) Or IsNull(rawValue) Or IsEmpty(rawValue) Then
+             ' Nothing to normalize.
+             targetValues(r, 1) = rawValue
+ 
+         ElseIf VarType(rawValue) = vbString Then
+             Dim trimmed As String
+             trimmed = CStr(NormalizeIdentifier(rawValue))
+             If trimmed <> CStr(rawValue) Then
+                 targetValues(r, 1) = trimmed
+                 needsWrite(r) = True
+                 changed = changed + 1
+             Else
+                 ' Already normalized text -- left untouched on purpose, to keep co-author
+@@ -198,33 +200,30 @@ Private Function NicSweepColumn(ByVal ws As Worksheet, ByVal colLetter As String
+             ' Numeric (or any other non-blank, non-error, non-string type): always needs to
+             ' become text, regardless of whether the digits themselves change.
+             targetValues(r, 1) = CStr(NormalizeIdentifier(rawValue))
+             needsWrite(r) = True
+             changed = changed + 1
+         End If
+     Next r
+ 
+     If changed = 0 Then
+         NicSweepColumn = 0
+         Exit Function
+     End If
+ 
+     If filterActive Then
+         NicWritePerCell ws, colLetter, isFormulaRow, needsWrite, targetValues, rowCount
+-    ElseIf Not anyFormula Then
+-        targetRange.NumberFormat = "@"
+-        targetRange.Value = targetValues
+     Else
+         NicWriteRuns ws, colLetter, isFormulaRow, needsWrite, targetValues, rowCount
+     End If
+ 
+     NicSweepColumn = changed
+ End Function
+ 
+ ' True when a bulk-read .Formula value is formula text starting with "=" -- the one way to
+ ' tell a formula cell from a literal without a second trip to the sheet (HasFormula per cell).
+ ' Guards IsError/IsNull first, either of which would make CStr raise.
+ Private Function NicIsFormulaText(ByVal formulaValue As Variant) As Boolean
+     If IsError(formulaValue) Or IsNull(formulaValue) Then Exit Function
+     NicIsFormulaText = (Left$(CStr(formulaValue), 1) = "=")
+ End Function
+ 
+diff --git a/README.md b/README.md
+index bf958f7..49f51d4 100644
+--- a/README.md
++++ b/README.md
+@@ -185,37 +185,43 @@ A tenant whose `req-join-key` entry is missing or broken degrades quietly to the
+ raises the same error for an unknown concept, and core has no way to tell that apart from a real
+ defect in the tenant's config.
+ 
+ ## Normalizing identifier columns
+ 
+ `NormalizeIdentifierColumns.vb` keeps REQ #, invoice numbers, and payment # as text on the
+ tracker sheet, the same way `ConvertStoreNumbers.vb` zero-pads STORE #. Every Coupa-side sheet
+ (`Coupa Reqs`, `Coupa Invs`, `Coupa POs`) stores its key column as text; XLOOKUP/VLOOKUP/Match
+ never coerce a numeric key to match a text value, so a tracker identifier cell that lands as a
+ Number silently breaks every formula keyed on it. See
+ `notes/identifier-types-investigation.md` for the live-workbook evidence and root cause.
+ 
+ `NormalizeIdentifierColumnsOn(ws, cols)` sweeps a sheet/column list with a bulk read/compute/
+ write per column, the same shape `ConvertStoreNumbers.vb` uses: one read of `.Value` and one
+ read of `.Formula` over the whole column, everything decided in memory (a cell is a formula
+-cell when its `.Formula` text starts with `"="`), then written back in as few calls as
+-possible — one blanket `NumberFormat = "@"` plus one blanket `Value = array` for the common
+-case of a column with no formula cells, or one write per contiguous run of changed rows when a
+-formula cell is mixed in, so it is never included in a written range. Formula cells are always
+-skipped outright, and an already-normalized text cell keeps its own value in the array so the
+-bulk write doesn't rewrite it, keeping co-author writes minimal. It finds each column's last
+-row by reading the whole `UsedRange` extent and scanning for the last non-blank cell in memory,
++cell when its `.Formula` text starts with `"="`), then written back with one `NumberFormat =
++"@"` plus `Value = array` write per maximal contiguous run of rows that actually need a change.
++Formula cells are never marked as needing a change, so they're never inside a written range;
++an already-normalized text cell, a WARRANTY-style marker, and a blank/Null/Error cell are the
++same — none of them gets a format or value write, not just an unchanged one. On a first sweep
++of an unnormalized column every row needs writing, so the whole column is one run and this
++still collapses to a single bulk write; later sweeps naturally shrink to writing only what
++changed. There is deliberately no separate "whole range in one shot, no formula cells" branch,
++because that would write `NumberFormat`/`Value` to every cell in the range including ones that
++never needed it — an earlier draft of this rewrite did exactly that, and it was caught in
++review because a co-author-visible format write is exactly what guarantee #4 exists to prevent.
++It finds each column's last row by reading the whole `UsedRange` extent and scanning for the
++last non-blank cell in memory,
+ because both `End(xlUp)` and `Find` walk visible cells only and would miss a row an AutoFilter
+ is hiding — the same trap `MirrorInvoiceBlock.vb` documents. That same AutoFilter hiding also
+ makes a multi-row bulk *write* unreliable (confirmed directly: a written array can land on the
+ wrong visible row while a hidden row keeps its stale value), so whenever the sheet has an
+ active filter the sweep falls back to one write per changed cell instead of a bulk range write.
+ It never raises and never shows a dialog: on error it returns whatever it already normalized.
+ 
+ `NormalizeIdentifierColumns(announce, manageProtection)` is the entry point Refresh calls: it
+ resolves the tracker sheet via `TenantSheetName("tracker")` and the columns via
+ `TenantIdentifierColumns()`, mapping each through `TenantColLetter`. **Every tenant that stacks
+ core must declare `TenantIdentifierColumns()`** (ADR-0003) — an empty array is a valid,
+ explicit no-op for a tenant that has none configured yet. `manageProtection` follows
+ `ConvertStoreNumbers`'s convention exactly, and each `Refresh` passes it the same way.
+ 
+ ## The fiscal calendar
+diff --git a/tests/Test-NormalizeIdentifierColumns.ps1 b/tests/Test-NormalizeIdentifierColumns.ps1
+index 9406b48..8e45e6e 100644
+--- a/tests/Test-NormalizeIdentifierColumns.ps1
++++ b/tests/Test-NormalizeIdentifierColumns.ps1
+@@ -61,79 +61,112 @@ End Function
+ $src = Join-Path $repo 'NormalizeIdentifierColumns.vb'
+ 
+ # --- Pure NormalizeIdentifier cases -------------------------------------------------------
+ $vba = New-VbaHost -SourceFiles @($src, $driver)
+ try {
+     $r = { param($n, $a) Invoke-VbaFunction -VbaHost $vba -Name $n -Arguments $a -TimeoutSeconds 30 }
+ 
+     Assert-Equal '914751' (& $r 'T_Normalize' @([double]914751)) -Because 'a whole number becomes plain digit text'
+     Assert-Equal '8059053607' (& $r 'T_Normalize' @([double]8059053607)) -Because 'a large whole number never renders as scientific notation'
+     Assert-Equal '810492' (& $r 'T_Normalize' @(' 810492 ')) -Because 'a padded numeric-looking string is trimmed'
+     Assert-Equal 'WARRANTY' (& $r 'T_Normalize' @('WARRANTY')) -Because 'a non-numeric marker is left alone'
+     Assert-Equal '(empty)' (Invoke-VbaFunction -VbaHost $vba -Name 'T_NormalizeEmpty' -TimeoutSeconds 30) -Because 'Empty passes through unchanged'
+ } finally { Remove-VbaHost -VbaHost $vba | Out-Null }
+ 
+ # --- Sheet sweep: ordinary (unfiltered) fixture -------------------------------------------
++# A numeric-looking string ("1166552") needs NumberFormat = "@" set *before* the value write,
++# or Excel re-numericizes it on assignment, exactly the trap guarantee #5 exists to avoid --
++# that pre-step is fixture setup, not a mask. A non-numeric string (a WARRANTY-style marker)
++# is never re-numericized regardless of format, so it is deliberately left with whatever
++# format the cell already has (General, for a fresh fixture cell) instead of forcing "@" --
++# forcing "@" on every string cell up front would make a spurious sweep-caused re-set to "@"
++# indistinguishable from the fixture's own setup, which is exactly the gap that let a real
++# regression (a blanket NumberFormat write over cells that never needed one) through review
++# undetected. Blank cells are left with their default format for the same reason.
+ function Set-Cell($ws, [int]$row, [int]$col, $value, [switch]$AsFormula) {
+     $cell = $ws.Cells($row, $col)
+     if ($AsFormula) {
+         $cell.Formula = $value
+     } elseif ($value -is [string]) {
+-        $cell.NumberFormat = '@'
++        if ($value -match '^\s*-?\d+(\.\d+)?\s*$') {
++            $cell.NumberFormat = '@'
++        }
+         $cell.Value2 = $value
+     } elseif ($null -eq $value) {
+         $cell.ClearContents() | Out-Null
+     } else {
+         $cell.Value2 = [double]$value
+     }
+ }
+ 
+ $vba = New-VbaHost -SourceFiles @($src, $driver)
+ try {
+     $ws = $vba.Workbook.Worksheets(1)
+ 
+     # Column A: numeric -> formula -> WARRANTY -> blank -> already-normalized text
+     Set-Cell $ws 1 1 'ID'
+     Set-Cell $ws 2 1 914751          # numeric: must become text "914751"
+     Set-Cell $ws 3 1 '=1+1' -AsFormula   # formula: must never be touched
+     Set-Cell $ws 4 1 'WARRANTY'       # marker text: already normalized, must be untouched
+     Set-Cell $ws 5 1 $null            # blank: must stay blank
+     Set-Cell $ws 6 1 '1166552'        # already text and already trimmed: not rewritten
+ 
++    # A deliberately wrong pre-existing format on the already-normalized text cell -- one no
++    # real sweep output would ever produce -- proves the sweep issues no format write at all
++    # for a cell whose value doesn't change, not merely that the value survives. Set-Cell's own
++    # "@" pre-step (needed to store '1166552' as text at all) already ran above; this overrides
++    # it afterward, which does not turn the stored string back into a number (verified directly:
++    # a NumberFormat change alone never coerces existing cell content).
++    $ws.Cells(6,1).NumberFormat = '0.00'
++    # WARRANTY (row 4) and the blank (row 5) were never given "@" by Set-Cell in the first
++    # place, so they are still whatever a fresh cell defaults to -- also a value the sweep
++    # itself would never legitimately write.
++    $warrantyFormatBefore = $ws.Cells(4,1).NumberFormat
++    $blankFormatBefore = $ws.Cells(5,1).NumberFormat
++
+     # Column C: same shapes, to prove multiple columns in one call are all swept
+     Set-Cell $ws 1 3 'ID2'
+     Set-Cell $ws 2 3 555555
+     Set-Cell $ws 3 3 '=2+2' -AsFormula
+     Set-Cell $ws 4 3 $null
+     Set-Cell $ws 5 3 'WARRANTY'
+     Set-Cell $ws 6 3 '9999'
+ 
+     $count = Invoke-VbaFunction -VbaHost $vba -Name 'T_Sweep' -Arguments @('A|C') -TimeoutSeconds 30
+ 
+     Assert-Equal 2 $count -Because 'exactly the two numeric cells (A2, C2) were changed'
+ 
+     Assert-Equal 'String' ($ws.Cells(2,1).Value2.GetType().Name) -Because 'A2 becomes a text-typed value'
+     Assert-Equal '914751' ($ws.Cells(2,1).Value2) -Because 'A2 keeps its digits exactly'
+     Assert-Equal '@' ($ws.Cells(2,1).NumberFormat) -Because 'A2 gets @ format before the write'
+ 
+     Assert-Equal $true ($ws.Cells(3,1).HasFormula) -Because 'a formula cell is never touched'
+     Assert-Equal 2 ($ws.Cells(3,1).Value2) -Because 'the formula still calculates'
+ 
+     Assert-Equal 'WARRANTY' ($ws.Cells(4,1).Value2) -Because 'a marker string is left alone'
+     Assert-Equal '' ([string]$ws.Cells(5,1).Value2) -Because 'a blank cell stays blank'
+     Assert-Equal '1166552' ($ws.Cells(6,1).Value2) -Because 'an already-normalized text cell is not rewritten'
+ 
++    # Proving no write happened at all, not just that the value round-tripped unchanged: each
++    # of these cells' deliberately-wrong pre-existing format must still be exactly what it was
++    # planted as above -- a real sweep write (NicWriteRuns/NicWritePerCell) always sets "@"
++    # first, so any of these being "@" now would mean the cell was written despite not needing
++    # a change.
++    Assert-Equal '0.00' ($ws.Cells(6,1).NumberFormat) -Because 'an already-normalized text cell gets no format write either'
++    Assert-Equal $warrantyFormatBefore ($ws.Cells(4,1).NumberFormat) -Because 'a marker string gets no format write'
++    Assert-Equal $blankFormatBefore ($ws.Cells(5,1).NumberFormat) -Because 'a blank cell gets no format write'
++
+     Assert-Equal 'String' ($ws.Cells(2,3).Value2.GetType().Name) -Because 'C2 becomes text too -- multiple columns are swept'
+     Assert-Equal '555555' ($ws.Cells(2,3).Value2) -Because 'C2 keeps its digits exactly'
+     Assert-Equal $true ($ws.Cells(3,3).HasFormula) -Because 'the second column formula cell is never touched either'
+ } finally { Remove-VbaHost -VbaHost $vba | Out-Null }
+ 
+ # --- Sheet sweep: formula cell in the middle of a literal column -------------------------
+ # Guarantee #1 (never write a formula cell) must hold even when literal cells needing changes
+ # surround the formula on both sides. This is also the only case that exercises NicWriteRuns's
+ # per-run write path, since every currently-configured tenant column has no formula cells at
+ # all -- the common path is the whole-range write exercised by every other case in this file.
+ $vba = New-VbaHost -SourceFiles @($src, $driver)
+ try {
+     $ws = $vba.Workbook.Worksheets(1)
+ 
+     Set-Cell $ws 1 1 'ID'
+@@ -157,58 +190,75 @@ try {
+     Assert-Equal 'String' ($ws.Cells(2,1).Value2.GetType().Name) -Because 'a numeric cell before the formula becomes text'
+     Assert-Equal '111' ($ws.Cells(2,1).Value2) -Because 'A2 keeps its digits exactly'
+     Assert-Equal '222' ($ws.Cells(3,1).Value2) -Because 'A3 keeps its digits exactly'
+     Assert-Equal '333' ($ws.Cells(4,1).Value2) -Because 'an already-clean text cell before the formula is not rewritten'
+ 
+     Assert-Equal 'String' ($ws.Cells(6,1).Value2.GetType().Name) -Because 'a numeric cell after the formula becomes text too'
+     Assert-Equal '444' ($ws.Cells(6,1).Value2) -Because 'A6 keeps its digits exactly'
+     Assert-Equal '555' ($ws.Cells(7,1).Value2) -Because 'a padded string after the formula is trimmed'
+     Assert-Equal 'WARRANTY' ($ws.Cells(8,1).Value2) -Because 'a marker string after the formula is left alone'
+     Assert-Equal '' ([string]$ws.Cells(9,1).Value2) -Because 'a blank cell after the formula stays blank'
+ } finally { Remove-VbaHost -VbaHost $vba | Out-Null }
+ 
+ # --- Sheet sweep: larger scale, mixed shapes, and a timing regression guard ---------------
+ # A generous wall-clock ceiling here is a regression guard against reintroducing a per-cell
+ # (O(n) COM round trips) sweep by accident -- not a tight performance benchmark.
++#
++# This fixture has zero formula cells, which is the specific shape that once took a blanket
++# NumberFormat="@" + Value=wholeArray write over the *entire* range -- including every
++# already-clean-text and blank row that never needed a write at all. Planting a deliberately
++# wrong pre-existing format on one of each and asserting it survives the sweep unchanged is
++# what catches that regression; checking only the post-sweep *value* does not, since the value
++# round-trips to the same thing either way.
+ $vba = New-VbaHost -SourceFiles @($src, $driver)
+ try {
+     $ws = $vba.Workbook.Worksheets(1)
+     Set-Cell $ws 1 1 'ID'
+ 
+     $rowCount = 300
+     $expectedChanged = 0
+     for ($i = 0; $i -lt $rowCount; $i++) {
+         $row = $i + 2
+         switch ($i % 3) {
+             0 { Set-Cell $ws $row 1 (1000000 + $i); $expectedChanged++ }
+             1 { Set-Cell $ws $row 1 ([string]$i) }
+             default { Set-Cell $ws $row 1 $null }
+         }
+     }
+ 
++    # Row 3 (i=1) is already-clean text ("1"); Set-Cell had to set "@" to store it as text at
++    # all, so override it afterward to a format no legitimate sweep output would produce.
++    # Row 4 (i=2) is blank and was never given "@" in the first place -- record its natural
++    # default so the after-sweep check isn't just hardcoding "General".
++    $ws.Cells(3,1).NumberFormat = '0.00'
++    $blankFormatBefore = $ws.Cells(4,1).NumberFormat
++
+     $sw = [System.Diagnostics.Stopwatch]::StartNew()
+     $count = Invoke-VbaFunction -VbaHost $vba -Name 'T_Sweep' -Arguments @('A') -TimeoutSeconds 30
+     $sw.Stop()
+ 
+     Assert-Equal $expectedChanged $count -Because 'every numeric row across a few hundred rows was counted, and only those'
+     Assert-Equal $true ($sw.Elapsed.TotalSeconds -lt 10) -Because 'the bulk sweep completes well under a generous ceiling, guarding against an accidental per-cell reintroduction'
+ 
+     Assert-Equal 'String' ($ws.Cells(2,1).Value2.GetType().Name) -Because 'the first numeric row becomes text'
+     Assert-Equal '1000000' ($ws.Cells(2,1).Value2) -Because 'the first numeric row keeps its digits exactly'
+     Assert-Equal '1' ($ws.Cells(3,1).Value2) -Because 'an already-clean text row is untouched in value'
+     Assert-Equal '' ([string]$ws.Cells(4,1).Value2) -Because 'a blank row stays blank'
+ 
++    Assert-Equal '0.00' ($ws.Cells(3,1).NumberFormat) -Because 'an already-clean text row gets no format write in the no-formula bulk path either'
++    Assert-Equal $blankFormatBefore ($ws.Cells(4,1).NumberFormat) -Because 'a blank row gets no format write in the no-formula bulk path either'
++
+     $tailIndex = $rowCount - 1
+     while (($tailIndex % 3) -ne 0) { $tailIndex-- }
+     $tailRow = $tailIndex + 2
+     Assert-Equal 'String' ($ws.Cells($tailRow,1).Value2.GetType().Name) -Because 'the last numeric row in the range also becomes text'
+     Assert-Equal ([string](1000000 + $tailIndex)) ($ws.Cells($tailRow,1).Value2) -Because 'the last numeric row keeps its digits exactly'
+ } finally { Remove-VbaHost -VbaHost $vba | Out-Null }
+ 
+ # --- Sheet sweep: filter-proofing ---------------------------------------------------------
+ # End(xlUp) and Find both walk visible cells only under an AutoFilter, so either would miss a
+ # filtered-out trailing row. NormalizeIdentifierColumnsOn instead reads UsedRange's full extent,
+ # which is unaffected by hidden rows. This fixture hides the sheet's last data row and proves it
+ # still gets normalized.
+ $vba = New-VbaHost -SourceFiles @($src, $driver)
+ try {
+     $ws = $vba.Workbook.Worksheets(1)
