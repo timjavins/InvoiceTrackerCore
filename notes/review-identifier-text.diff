@@ -1,0 +1,686 @@
+===== InvoiceTrackerCore 2653dd4..HEAD
+76062be fix(LookupReqs): set text format before writing REQ #
+41e1565 feat: normalize tracker identifier columns to text
+ LookupReqs.vb                             |   5 +
+ NormalizeIdentifierColumns.vb             | 200 ++++++++++++++++++++++++++++++
+ README.md                                 |  24 ++++
+ tests/Test-NormalizeIdentifierColumns.ps1 | 171 +++++++++++++++++++++++++
+ 4 files changed, 400 insertions(+)
+diff --git a/LookupReqs.vb b/LookupReqs.vb
+index 36689f4..7ccf70a 100644
+--- a/LookupReqs.vb
++++ b/LookupReqs.vb
+@@ -136,20 +136,25 @@ Public Sub LookupReqs(Optional ByVal announce As Boolean = True, _
+             invoiceNum = Trim$(CStr(trackerInvoices(i, 1)))
+             If Len(invoiceNum) > 0 Then
+                 If reqLookup.Exists(invoiceNum) Then
+                     trackerReqNums(i, 1) = reqLookup(invoiceNum)
+                     foundCount = foundCount + 1
+                 End If
+             End If
+         End If
+     Next i
+ 
++    ' Set text format before assigning: on a General cell, writing a numeric-looking value
++    ' (e.g. a REQ # copied straight from Coupa Reqs) re-numericizes it, exactly as if a person
++    ' had typed it in -- silently breaking every XLOOKUP keyed on this column against the
++    ' Coupa sheets, whose keys are text. Matches CopyPaymentNums.vb and UpdateSearchValues.
++    wsTracker.Range(colTrackerReq & "2:" & colTrackerReq & lastRow).NumberFormat = "@"
+     wsTracker.Range(colTrackerReq & "2:" & colTrackerReq & lastRow).Value = trackerReqNums
+ 
+     If manageProtection Then ProtectSheet
+ 
+     If announce And foundCount > 0 Then
+         MsgBox foundCount & " requisition number(s) found for invoices that had none listed.", _
+                vbInformation
+     End If
+ 
+     Exit Sub
+diff --git a/NormalizeIdentifierColumns.vb b/NormalizeIdentifierColumns.vb
+new file mode 100644
+index 0000000..39c71dc
+--- /dev/null
++++ b/NormalizeIdentifierColumns.vb
+@@ -0,0 +1,200 @@
++' Normalizes the tracker's identifier columns -- REQ #, invoice numbers, payment # -- to text,
++' the same way ConvertStoreNumbers.vb normalizes STORE #. See
++' notes/identifier-types-investigation.md.
++'
++' Why this exists: every Coupa-side sheet (Coupa Reqs, Coupa Invs, Coupa POs) stores its key
++' column as text -- confirmed on both live workbooks. XLOOKUP/VLOOKUP/Match never coerce a
++' numeric key to match a text value or vice versa, so a tracker cell that lands as a Number
++' (Excel re-numericizes a numeric-looking string typed, pasted, or written into a General cell)
++' silently breaks every formula keyed on it. This sweeps the tracker's own identifier columns
++' back to text on every Refresh, rather than relying on a one-time migration to stay clean.
++
++' Pure conversion: an identifier value as trimmed text, preserving digits exactly (no
++' scientific notation, no dropped leading character) and leaving non-identifier shapes alone.
++'
++'   - A whole-number numeric value (Double/Long/Integer/Currency/Decimal, etc.) becomes
++'     Format$(v, "0") -- so 8059053607 becomes "8059053607", never "8.05905E+09".
++'   - A non-whole-number numeric value becomes CStr(v) -- an identifier is never fractional in
++'     practice, but this still returns a legible string rather than guessing at rounding.
++'   - A string becomes Trim$ of itself.
++'   - Empty, Null, and error values pass through unchanged -- there is nothing to normalize,
++'     and guessing a replacement for any of them would destroy information (a genuine blank,
++'     a #N/A propagated from elsewhere, or a deliberately unset cell).
++Public Function NormalizeIdentifier(ByVal v As Variant) As Variant
++    If IsError(v) Or IsNull(v) Or IsEmpty(v) Then
++        NormalizeIdentifier = v
++        Exit Function
++    End If
++
++    Select Case VarType(v)
++        Case vbInteger, vbLong, vbSingle, vbDouble, vbCurrency, vbDecimal, vbByte, vbLongLong
++            Dim d As Double
++            d = CDbl(v)
++            If d = Int(d) Then
++                NormalizeIdentifier = Format$(v, "0")
++            Else
++                NormalizeIdentifier = CStr(v)
++            End If
++
++        Case vbString
++            NormalizeIdentifier = Trim$(CStr(v))
++
++        Case Else
++            ' Boolean, Date, Object, etc. -- not a shape this column should ever hold; handed
++            ' back unchanged rather than guessed at.
++            NormalizeIdentifier = v
++    End Select
++End Function
++
++' Sweeps one or more columns on ws, rewriting every non-formula cell that is not already
++' normalized text. cols is an array of column letters (already resolved through
++' TenantColLetter by the caller below), so this is testable against any sheet/column shape
++' without a tenant workbook.
++'
++' Returns the count of cells actually changed. Never raises and never shows a dialog -- this
++' runs from Refresh, where an unhandled error must not abort the rest of the run, and the test
++' harness cannot survive a modal dialog. On error, whatever was already normalized stays
++' normalized; the count reflects that partial progress rather than being lost.
++Public Function NormalizeIdentifierColumnsOn(ByVal ws As Worksheet, ByVal cols As Variant) As Long
++    Dim changed As Long
++    changed = 0
++
++    On Error GoTo Done
++
++    If ws Is Nothing Then GoTo Done
++    If Not IsArray(cols) Then GoTo Done
++
++    ' UsedRange's extent is unaffected by AutoFilter-hidden rows -- only by actual content --
++    ' unlike End(xlUp) or Find, which both walk visible cells only and so would silently miss a
++    ' filtered-out trailing row. See MirrorInvoiceBlock.vb for the same trap measured directly.
++    Dim usedLastRow As Long
++    usedLastRow = ws.UsedRange.Row + ws.UsedRange.Rows.Count - 1
++
++    Dim c As Long
++    For c = LBound(cols) To UBound(cols)
++        Dim colLetter As String
++        colLetter = Trim$(CStr(cols(c)))
++
++        If Len(colLetter) > 0 Then
++            Dim colLastRow As Long
++            colLastRow = LastNonEmptyRow(ws, colLetter, usedLastRow)
++
++            If colLastRow >= 2 Then
++                Dim r As Long
++                For r = 2 To colLastRow
++                    Dim cell As Range
++                    Set cell = ws.Cells(r, colLetter)
++
++                    ' Never write to a formula cell -- rewriting its value replaces the
++                    ' formula with a literal.
++                    If Not cell.HasFormula Then
++                        Dim raw As Variant
++                        raw = cell.Value
++
++                        If IsError(raw) Or IsNull(raw) Or IsEmpty(raw) Then
++                            ' Nothing to normalize.
++
++                        ElseIf VarType(raw) = vbString Then
++                            Dim trimmed As String
++                            trimmed = CStr(NormalizeIdentifier(raw))
++                            If trimmed <> CStr(raw) Then
++                                cell.NumberFormat = "@"
++                                cell.Value = trimmed
++                                changed = changed + 1
++                            End If
++                            ' Else: already normalized text -- left untouched on purpose, to
++                            ' keep co-author writes minimal.
++
++                        Else
++                            ' Numeric (or any other non-blank, non-error, non-string type):
++                            ' always needs to become text, regardless of whether the digits
++                            ' themselves change.
++                            cell.NumberFormat = "@"
++                            cell.Value = CStr(NormalizeIdentifier(raw))
++                            changed = changed + 1
++                        End If
++                    End If
++                Next r
++            End If
++        End If
++    Next c
++
++Done:
++    NormalizeIdentifierColumnsOn = changed
++End Function
++
++' Last non-blank row in one column, immune to filter-hidden rows -- see the comment above on
++' why UsedRange is used instead of End(xlUp)/Find. Reads the column once into memory and scans
++' it in VBA rather than touching the sheet cell by cell.
++Private Function LastNonEmptyRow(ByVal ws As Worksheet, ByVal colLetter As String, _
++                                 ByVal usedLastRow As Long) As Long
++    If usedLastRow < 2 Then Exit Function
++
++    Dim values As Variant
++    values = ws.Range(colLetter & "2:" & colLetter & usedLastRow).Value
++
++    ' A one-row range comes back as a bare value rather than a 2D array.
++    If Not IsArray(values) Then
++        If Not (IsEmpty(values) Or IsNull(values) Or IsError(values)) Then
++            If Len(Trim$(CStr(values))) > 0 Then LastNonEmptyRow = 2
++        End If
++        Exit Function
++    End If
++
++    Dim i As Long
++    Dim v As Variant
++    For i = UBound(values, 1) To LBound(values, 1) Step -1
++        v = values(i, 1)
++        If Not (IsEmpty(v) Or IsNull(v) Or IsError(v)) Then
++            If Len(Trim$(CStr(v))) > 0 Then
++                LastNonEmptyRow = i + 1   ' array row 1 == sheet row 2
++                Exit Function
++            End If
++        End If
++    Next i
++End Function
++
++' Normalizes the tenant's declared identifier columns on its tracker sheet.
++'
++' Silent by default -- called from Refresh, where a modal dialog per step is noise. Pass
++' announce:=True for interactive use.
++'
++' manageProtection follows ConvertStoreNumbers's convention exactly: default True because some
++' callers protect the sheet before calling and rely on each step unprotecting itself; callers
++' that already unprotect around a whole sequence pass False to avoid redundant toggling.
++'
++' TenantIdentifierColumns() returning an empty array is a no-op -- a tenant that has not (yet)
++' declared any identifier columns simply gets nothing done here.
++Public Sub NormalizeIdentifierColumns(Optional ByVal announce As Boolean = False, _
++                                      Optional ByVal manageProtection As Boolean = True)
++    Dim ws As Worksheet
++    Set ws = ThisWorkbook.Sheets(TenantSheetName("tracker"))
++
++    Dim concepts As Variant
++    concepts = TenantIdentifierColumns()
++
++    If Not IsArray(concepts) Then Exit Sub
++    If UBound(concepts) < LBound(concepts) Then Exit Sub
++
++    Dim cols() As String
++    ReDim cols(LBound(concepts) To UBound(concepts))
++
++    Dim i As Long
++    For i = LBound(concepts) To UBound(concepts)
++        cols(i) = TenantColLetter(CStr(concepts(i)))
++    Next i
++
++    If manageProtection Then
++        ws.Activate
++        UnprotectSheet
++    End If
++
++    Dim changed As Long
++    changed = NormalizeIdentifierColumnsOn(ws, cols)
++
++    If manageProtection Then ProtectSheet
++
++    If announce Then
++        MsgBox changed & " identifier value(s) normalized to text.", vbInformation
++    End If
++End Sub
+diff --git a/README.md b/README.md
+index c2460b9..ad46055 100644
+--- a/README.md
++++ b/README.md
+@@ -178,20 +178,44 @@ prevent.
+ The fallback is the compatibility guarantee: `SecuritasAutomation` and `JCI-invoice-tracker` need
+ no change to keep joining on the column they always used. Both now declare `req-join-key`
+ explicitly anyway, each naming its own existing submitted-invoice-number column — `O` for
+ Securitas, `J` for JCI — so the declared value and the fallback agree for both today.
+ 
+ A tenant whose `req-join-key` entry is missing or broken degrades quietly to the
+ `submitted-invoice-number` fallback rather than failing loudly: every tenant's `TenantColLetter`
+ raises the same error for an unknown concept, and core has no way to tell that apart from a real
+ defect in the tenant's config.
+ 
++## Normalizing identifier columns
++
++`NormalizeIdentifierColumns.vb` keeps REQ #, invoice numbers, and payment # as text on the
++tracker sheet, the same way `ConvertStoreNumbers.vb` zero-pads STORE #. Every Coupa-side sheet
++(`Coupa Reqs`, `Coupa Invs`, `Coupa POs`) stores its key column as text; XLOOKUP/VLOOKUP/Match
++never coerce a numeric key to match a text value, so a tracker identifier cell that lands as a
++Number silently breaks every formula keyed on it. See
++`notes/identifier-types-investigation.md` for the live-workbook evidence and root cause.
++
++`NormalizeIdentifierColumnsOn(ws, cols)` sweeps a sheet/column list, sets `NumberFormat = "@"`
++before rewriting a cell, skips formula cells outright, and leaves an already-normalized text
++cell untouched to keep co-author writes minimal. It finds each column's last row by reading the
++whole `UsedRange` extent and scanning for the last non-blank cell in memory, because both
++`End(xlUp)` and `Find` walk visible cells only and would miss a row an AutoFilter is hiding —
++the same trap `MirrorInvoiceBlock.vb` documents. It never raises and never shows a dialog: on
++error it returns whatever it already normalized.
++
++`NormalizeIdentifierColumns(announce, manageProtection)` is the entry point Refresh calls: it
++resolves the tracker sheet via `TenantSheetName("tracker")` and the columns via
++`TenantIdentifierColumns()`, mapping each through `TenantColLetter`. **Every tenant that stacks
++core must declare `TenantIdentifierColumns()`** (ADR-0003) — an empty array is a valid,
++explicit no-op for a tenant that has none configured yet. `manageProtection` follows
++`ConvertStoreNumbers`'s convention exactly, and each `Refresh` passes it the same way.
++
+ ## The fiscal calendar
+ 
+ `FiscalCalendar.vb` computes Nordstrom's 4-5-4 retail fiscal calendar -- fiscal year
+ boundaries, week counts, month starts, and the reverse lookups from a date to its fiscal
+ year/week/month. It is pure computation: no worksheet, no workbook, no file, no network. That
+ matters because the calendar used to be looked up in a Finance-owned SharePoint workbook, which
+ meant every consumer inherited that file's availability and layout. This module instead derives
+ the whole calendar from one anchor rule -- fiscal year N ends on the Saturday closest to 31
+ January of year N+1 -- plus a repeating 4,5,4 week cycle per quarter, so nothing at run time
+ needs to read anything.
+diff --git a/tests/Test-NormalizeIdentifierColumns.ps1 b/tests/Test-NormalizeIdentifierColumns.ps1
+new file mode 100644
+index 0000000..3094419
+--- /dev/null
++++ b/tests/Test-NormalizeIdentifierColumns.ps1
+@@ -0,0 +1,171 @@
++# Run: powershell -NoProfile -ExecutionPolicy Bypass -File tests\Test-NormalizeIdentifierColumns.ps1
++Set-StrictMode -Version Latest
++$ErrorActionPreference = 'Stop'
++
++$repo = Split-Path $PSScriptRoot -Parent
++Import-Module (Join-Path $PSScriptRoot 'VbaHarness.psm1') -Force
++Reset-AssertCounters
++
++# NormalizeIdentifierColumns.vb (both the Sub and the Function) is one module, and VBA compiles
++# a module as a whole once anything in it is entered -- so the Sub's callees (TenantSheetName,
++# TenantIdentifierColumns, TenantColLetter, UnprotectSheet, ProtectSheet) must be resolvable even
++# though the tests below only ever call NormalizeIdentifier / NormalizeIdentifierColumnsOn
++# directly. Same reasoning as LookupReqs needing UnprotectSheet/ProtectSheet stubs -- see
++# tests/README.md.
++$driver = Join-Path $env:TEMP 'NicDriver.vb'
++@'
++Public Function TenantSheetName(ByVal role As String) As String
++    TenantSheetName = "Sheet1"
++End Function
++
++Public Function TenantIdentifierColumns() As Variant
++    TenantIdentifierColumns = Array()
++End Function
++
++Public Function TenantColLetter(ByVal concept As String) As String
++    TenantColLetter = "A"
++End Function
++
++Public Sub UnprotectSheet()
++End Sub
++
++Public Sub ProtectSheet()
++End Sub
++
++Public Function T_Normalize(ByVal v As Variant) As String
++    T_Normalize = DescribeVariant(NormalizeIdentifier(v))
++End Function
++
++' Empty cannot cross the COM boundary reliably as an argument (a passed $null marshals as
++' Null, not Empty), so this calls with an uninitialized Variant instead, which VBA gives Empty.
++Public Function T_NormalizeEmpty() As String
++    Dim v As Variant
++    T_NormalizeEmpty = DescribeVariant(NormalizeIdentifier(v))
++End Function
++
++Private Function DescribeVariant(ByVal r As Variant) As String
++    If IsEmpty(r) Then
++        DescribeVariant = "(empty)"
++    ElseIf IsNull(r) Then
++        DescribeVariant = "(null)"
++    Else
++        DescribeVariant = CStr(r)
++    End If
++End Function
++
++Public Function T_Sweep(ByVal colsJoined As String) As Long
++    T_Sweep = NormalizeIdentifierColumnsOn(ThisWorkbook.Worksheets(1), Split(colsJoined, "|"))
++End Function
++'@ | Set-Content -LiteralPath $driver -Encoding UTF8
++
++$src = Join-Path $repo 'NormalizeIdentifierColumns.vb'
++
++# --- Pure NormalizeIdentifier cases -------------------------------------------------------
++$vba = New-VbaHost -SourceFiles @($src, $driver)
++try {
++    $r = { param($n, $a) Invoke-VbaFunction -VbaHost $vba -Name $n -Arguments $a -TimeoutSeconds 30 }
++
++    Assert-Equal '914751' (& $r 'T_Normalize' @([double]914751)) -Because 'a whole number becomes plain digit text'
++    Assert-Equal '8059053607' (& $r 'T_Normalize' @([double]8059053607)) -Because 'a large whole number never renders as scientific notation'
++    Assert-Equal '810492' (& $r 'T_Normalize' @(' 810492 ')) -Because 'a padded numeric-looking string is trimmed'
++    Assert-Equal 'WARRANTY' (& $r 'T_Normalize' @('WARRANTY')) -Because 'a non-numeric marker is left alone'
++    Assert-Equal '(empty)' (Invoke-VbaFunction -VbaHost $vba -Name 'T_NormalizeEmpty' -TimeoutSeconds 30) -Because 'Empty passes through unchanged'
++} finally { Remove-VbaHost -VbaHost $vba | Out-Null }
++
++# --- Sheet sweep: ordinary (unfiltered) fixture -------------------------------------------
++function Set-Cell($ws, [int]$row, [int]$col, $value, [switch]$AsFormula) {
++    $cell = $ws.Cells($row, $col)
++    if ($AsFormula) {
++        $cell.Formula = $value
++    } elseif ($value -is [string]) {
++        $cell.NumberFormat = '@'
++        $cell.Value2 = $value
++    } elseif ($null -eq $value) {
++        $cell.ClearContents() | Out-Null
++    } else {
++        $cell.Value2 = [double]$value
++    }
++}
++
++$vba = New-VbaHost -SourceFiles @($src, $driver)
++try {
++    $ws = $vba.Workbook.Worksheets(1)
++
++    # Column A: numeric -> formula -> WARRANTY -> blank -> already-normalized text
++    Set-Cell $ws 1 1 'ID'
++    Set-Cell $ws 2 1 914751          # numeric: must become text "914751"
++    Set-Cell $ws 3 1 '=1+1' -AsFormula   # formula: must never be touched
++    Set-Cell $ws 4 1 'WARRANTY'       # marker text: already normalized, must be untouched
++    Set-Cell $ws 5 1 $null            # blank: must stay blank
++    Set-Cell $ws 6 1 '1166552'        # already text and already trimmed: not rewritten
++
++    # Column C: same shapes, to prove multiple columns in one call are all swept
++    Set-Cell $ws 1 3 'ID2'
++    Set-Cell $ws 2 3 555555
++    Set-Cell $ws 3 3 '=2+2' -AsFormula
++    Set-Cell $ws 4 3 $null
++    Set-Cell $ws 5 3 'WARRANTY'
++    Set-Cell $ws 6 3 '9999'
++
++    $count = Invoke-VbaFunction -VbaHost $vba -Name 'T_Sweep' -Arguments @('A|C') -TimeoutSeconds 30
++
++    Assert-Equal 2 $count -Because 'exactly the two numeric cells (A2, C2) were changed'
++
++    Assert-Equal 'String' ($ws.Cells(2,1).Value2.GetType().Name) -Because 'A2 becomes a text-typed value'
++    Assert-Equal '914751' ($ws.Cells(2,1).Value2) -Because 'A2 keeps its digits exactly'
++    Assert-Equal '@' ($ws.Cells(2,1).NumberFormat) -Because 'A2 gets @ format before the write'
++
++    Assert-Equal $true ($ws.Cells(3,1).HasFormula) -Because 'a formula cell is never touched'
++    Assert-Equal 2 ($ws.Cells(3,1).Value2) -Because 'the formula still calculates'
++
++    Assert-Equal 'WARRANTY' ($ws.Cells(4,1).Value2) -Because 'a marker string is left alone'
++    Assert-Equal '' ([string]$ws.Cells(5,1).Value2) -Because 'a blank cell stays blank'
++    Assert-Equal '1166552' ($ws.Cells(6,1).Value2) -Because 'an already-normalized text cell is not rewritten'
++
++    Assert-Equal 'String' ($ws.Cells(2,3).Value2.GetType().Name) -Because 'C2 becomes text too -- multiple columns are swept'
++    Assert-Equal '555555' ($ws.Cells(2,3).Value2) -Because 'C2 keeps its digits exactly'
++    Assert-Equal $true ($ws.Cells(3,3).HasFormula) -Because 'the second column formula cell is never touched either'
++} finally { Remove-VbaHost -VbaHost $vba | Out-Null }
++
++# --- Sheet sweep: filter-proofing ---------------------------------------------------------
++# End(xlUp) and Find both walk visible cells only under an AutoFilter, so either would miss a
++# filtered-out trailing row. NormalizeIdentifierColumnsOn instead reads UsedRange's full extent,
++# which is unaffected by hidden rows. This fixture hides the sheet's last data row and proves it
++# still gets normalized.
++$vba = New-VbaHost -SourceFiles @($src, $driver)
++try {
++    $ws = $vba.Workbook.Worksheets(1)
++
++    Set-Cell $ws 1 1 'ID'
++    Set-Cell $ws 1 2 'TAG'
++    Set-Cell $ws 2 1 111111
++    Set-Cell $ws 2 2 'show'
++    Set-Cell $ws 3 1 222222          # last data row -- will be hidden by the filter
++    Set-Cell $ws 3 2 'hide'
++
++    $ws.Range($ws.Cells(1,1), $ws.Cells(3,2)).AutoFilter(2, 'show') | Out-Null
++    Assert-Equal $true $ws.FilterMode -Because 'the fixture actually has an active filter'
++    Assert-Equal $true $ws.Rows(3).Hidden -Because 'the last data row starts out hidden by the filter'
++
++    $count = Invoke-VbaFunction -VbaHost $vba -Name 'T_Sweep' -Arguments @('A') -TimeoutSeconds 30
++
++    Assert-Equal 2 $count -Because 'both rows were normalized, including the hidden one'
++    Assert-Equal 'String' ($ws.Cells(3,1).Value2.GetType().Name) -Because 'the hidden row is normalized to text'
++    Assert-Equal '222222' ($ws.Cells(3,1).Value2) -Because 'the hidden row keeps its digits exactly'
++    Assert-Equal '@' ($ws.Cells(3,1).NumberFormat) -Because 'the hidden row gets @ format too'
++    Assert-Equal $true $ws.Rows(3).Hidden -Because 'the sweep never touches the filter itself'
++} finally { Remove-VbaHost -VbaHost $vba | Out-Null }
++
++# --- Document-module compile check ---------------------------------------------------------
++# Proves NormalizeIdentifierColumns.vb -- both the Function and the Sub, together, since VBA
++# compiles a module as a whole -- survives being pasted into ThisWorkbook, a document (class)
++# module, the same kind of module Stack-VBFiles.ps1 pastes it into in every tenant's real
++# assembled stack. See tests/README.md.
++$vba = New-VbaHost -SourceFiles @($src, $driver) -DocumentModule
++try {
++    Assert-Equal 0 ($vba.Workbook.T_Sweep('A')) `
++                 -Because 'NormalizeIdentifierColumns.vb compiles and runs inside ThisWorkbook'
++} finally { Remove-VbaHost -VbaHost $vba | Out-Null }
++
++Remove-Item $driver -Force -ErrorAction SilentlyContinue
++Write-AssertSummary
+===== SecuritasAutomation 1725046..HEAD
+05fe28f feat: wire NormalizeIdentifierColumns into Refresh
+ Refresh.vb      | 7 +++++++
+ TenantConfig.vb | 9 +++++++++
+ 2 files changed, 16 insertions(+)
+diff --git a/Refresh.vb b/Refresh.vb
+index fe6e100..491754f 100644
+--- a/Refresh.vb
++++ b/Refresh.vb
+@@ -31,20 +31,27 @@ Sub Refresh()
+ 
+     ' Call the CheckOpeningDate subroutine
+     Call CheckOpeningDate(True, True)
+ 
+     ' Call the ReplaceNullValues subroutine
+     Call ReplaceNullValues
+ 
+     ' Call the ConvertStoreNumbers subroutine to ensure STORE # values are four-digit text (e.g., 0001)
+     Call ConvertStoreNumbers(False, True)
+ 
++    ' Call NormalizeIdentifierColumns to keep REQ #, invoice numbers and PAYMENT # as text --
++    ' same reason ConvertStoreNumbers above exists: a numeric REQ # breaks the XLOOKUPs
++    ' WriteFormulas_Tracker is about to write, since the Coupa sheets they key against store
++    ' text. Runs after LookupReqs so a freshly backfilled REQ # gets swept too, and before
++    ' WriteFormulas_Tracker so the XLOOKUPs recalculate against clean keys in this same run.
++    Call NormalizeIdentifierColumns(False, True)
++
+     ' Call the WriteFormulas_Helper subroutine
+     Call WriteFormulas_Helper (Worksheets("Helper"), Worksheets("Invoices"))
+ 
+     ' Call the WriteFormulas_Tracker subroutine
+     Call WriteFormulas_Tracker (Worksheets("Invoices"))
+ 
+     ' Call the UpdateSearchValues subroutine
+     Call UpdateSearchValues
+     
+     ' Call the ExtractInvApprovalDate subroutine
+diff --git a/TenantConfig.vb b/TenantConfig.vb
+index 2fc9c84..3524d45 100644
+--- a/TenantConfig.vb
++++ b/TenantConfig.vb
+@@ -113,20 +113,29 @@ Public Function TenantColLetter(ByVal concept As String) As String
+         Case "blocker-name":            TenantColLetter = "AG"
+         ' This tracker joins its rows to Coupa requisitions on the submitted invoice #, which the
+         ' supplier provides. Declared explicitly so core does not have to fall back.
+         Case "req-join-key":            TenantColLetter = "O"
+         Case Else
+             Err.Raise 5, "TenantColLetter", _
+                 "Unknown column concept '" & concept & "'. Add it to TenantConfig."
+     End Select
+ End Function
+ 
++' Identifier concepts NormalizeIdentifierColumns sweeps to text on every Refresh, the same way
++' ConvertStoreNumbers zero-pads STORE #. purchase-order-number (U) is deliberately not listed:
++' it is a pure formula column here (see WriteFormulas_Tracker.vb), and NormalizeIdentifierColumnsOn
++' skips formula cells outright, so listing it would do nothing but invite confusion later.
++Public Function TenantIdentifierColumns() As Variant
++    TenantIdentifierColumns = Array("submitted-invoice-number", "coupa-invoice-number", _
++                                    "requisition-number", "payment-number")
++End Function
++
+ ' Converts the letter to a column index without depending on the active sheet.
+ Public Function TenantCol(ByVal concept As String) As Long
+     Dim letters As String
+     Dim i As Long
+     Dim result As Long
+ 
+     letters = UCase$(TenantColLetter(concept))
+     For i = 1 To Len(letters)
+         result = result * 26 + (Asc(Mid$(letters, i, 1)) - 64)
+     Next i
+===== JCI-invoice-tracker a9322d2..HEAD
+32bcce3 fix(WriteFormulas_Tracker): DELETED? tests REQ # column
+316752d feat: wire NormalizeIdentifierColumns into Refresh
+ Refresh.vb               |  8 ++++++++
+ TenantConfig.vb          | 10 ++++++++++
+ WriteFormulas_Tracker.vb |  7 ++++++-
+ 3 files changed, 24 insertions(+), 1 deletion(-)
+diff --git a/Refresh.vb b/Refresh.vb
+index 36625ca..2ac9f18 100644
+--- a/Refresh.vb
++++ b/Refresh.vb
+@@ -25,20 +25,28 @@ Sub Refresh()
+     Dim filterRow As Long
+     filterRow = RemoveAutoFilter(ActiveSheet)
+     
+     ' Back-fill REQ # for invoices whose requisition already exists in Coupa. Matches the
+     ' submitted invoice # against the requisition export's Supplier Part Number.
+     ' Runs before CheckOpeningDate and MarkDuplicateInvoices: those write WARRANTY and
+     ' DUPLICATE markers into the same column, and the back-fill only touches empty cells, so
+     ' running it later would leave marked rows without their real requisition number.
+     Call LookupReqs(True, False)
+ 
++    ' Call NormalizeIdentifierColumns to keep REQ # and INVOICE # as text -- a numeric REQ #
++    ' breaks the XLOOKUPs WriteFormulas_Tracker is about to write, since the Coupa sheets they
++    ' key against store text. Runs after LookupReqs so a freshly backfilled REQ # gets swept
++    ' too, and before WriteFormulas_Tracker so the XLOOKUPs recalculate against clean keys in
++    ' this same run. The sheet is already unprotected above, so it does not manage protection
++    ' itself -- same as ConvertStoreNumbers below.
++    Call NormalizeIdentifierColumns(False, False)
++
+     Call WriteFormulas_Tracker(ActiveSheet)
+ 
+     ' Call the ConvertStoreNumbers subroutine
+     ' The sheet is already unprotected above, so it does not manage protection itself.
+     Call ConvertStoreNumbers(False, False)
+ 
+     ' Call the CheckOpeningDate subroutine
+     Call CheckOpeningDate(True, False)
+     
+     ' Call the MarkDuplicateInvoices subroutine
+diff --git a/TenantConfig.vb b/TenantConfig.vb
+index d731391..07a4f6b 100644
+--- a/TenantConfig.vb
++++ b/TenantConfig.vb
+@@ -103,20 +103,30 @@ Public Function TenantColLetter(ByVal concept As String) As String
+         Case "coupa-invoice-number":    TenantColLetter = "J"
+         ' This tracker joins its rows to Coupa requisitions on the submitted invoice #, which the
+         ' supplier provides. Declared explicitly so core does not have to fall back.
+         Case "req-join-key":            TenantColLetter = "J"
+         Case Else
+             Err.Raise 5, "TenantColLetter", _
+                 "Unknown column concept '" & concept & "'. Add it to TenantConfig."
+     End Select
+ End Function
+ 
++' Identifier concepts NormalizeIdentifierColumns sweeps to text on every Refresh, the same way
++' ConvertStoreNumbers zero-pads STORE #. coupa-invoice-number is not listed separately -- column
++' J doubles as both submitted-invoice-number and coupa-invoice-number here (see ADR-0001), so
++' listing it twice would sweep the same column twice for no gain. PO # (N) and PAYMENT (X) are
++' both pure formula columns (see WriteFormulas_Tracker.vb), and NormalizeIdentifierColumnsOn
++' skips formula cells outright, so neither belongs here.
++Public Function TenantIdentifierColumns() As Variant
++    TenantIdentifierColumns = Array("submitted-invoice-number", "requisition-number")
++End Function
++
+ ' Converts the letter to a column index without depending on the active sheet.
+ Public Function TenantCol(ByVal concept As String) As Long
+     Dim letters As String
+     Dim i As Long
+     Dim result As Long
+ 
+     letters = UCase$(TenantColLetter(concept))
+     For i = 1 To Len(letters)
+         result = result * 26 + (Asc(Mid$(letters, i, 1)) - 64)
+     Next i
+diff --git a/WriteFormulas_Tracker.vb b/WriteFormulas_Tracker.vb
+index 42560e8..f139184 100644
+--- a/WriteFormulas_Tracker.vb
++++ b/WriteFormulas_Tracker.vb
+@@ -38,21 +38,26 @@ Sub WriteFormulas_Tracker(wsTarget As Worksheet)
+     
+     ' Build formulas in memory
+     For i = 2 To lastRow
+         formulasB(i - 1, 1) = "=IFERROR(VLOOKUP(A" & i & ",'BU List'!$A:$D,4,0),VLOOKUP(A" & i & ",'BU List'!$B:$D,3,0))"
+         formulasC(i - 1, 1) = "=VLOOKUP(A" & i & ",'BU List'!A:E,5,0)"
+         formulasD(i - 1, 1) = "=VLOOKUP(A" & i & ",'Store Directory'!$A:$L,2,0)"
+         formulasE(i - 1, 1) = "=VLOOKUP(A" & i & ",'Store Directory'!$A:$M,3,0)"
+         formulasF(i - 1, 1) = "=VLOOKUP(A" & i & ",'Store Directory'!$A:$M,4,0)"
+         formulasG(i - 1, 1) = "=VLOOKUP(A" & i & ",'Store Directory'!$A:$M,5,0)"
+         formulasH(i - 1, 1) = "=VLOOKUP(A" & i & ",'Store Directory'!$A:$M,6,0)"
+-        formulasM(i - 1, 1) = "=XLOOKUP(L" & i & ",'Coupa Reqs'!A:A,'Coupa Reqs'!D:D,IF(ISNUMBER(S" & i & "),""DELETED?"",""""))"
++        ' The DELETED? fallback tests ISNUMBER on this tracker's own REQ # column (L), matching
++        ' the Securitas formula this was copied from, where the equivalent fallback tests S --
++        ' Securitas's own REQ # column. Here the fallback used to test S, this tracker's
++        ' Coupa INV Date, a stale reference left over from that copy -- see
++        ' InvoiceTrackerCore/notes/identifier-types-investigation.md, sections 3 and 6.
++        formulasM(i - 1, 1) = "=XLOOKUP(L" & i & ",'Coupa Reqs'!A:A,'Coupa Reqs'!D:D,IF(ISNUMBER(L" & i & "),""DELETED?"",""""))"
+         formulasN(i - 1, 1) = "=IF(L2=""WARRANTY"",L2, IF(OR(L" & i & "="""", M" & i & "=""Draft"", M" & i & "=""Pending Approval""), """", XLOOKUP(L" & i & ",'Coupa Reqs'!A:A,'Coupa Reqs'!F:F,"""")))"
+         formulasO(i - 1, 1) = "=XLOOKUP(N" & i & ",'Coupa POs'!A:A,'Coupa POs'!B:B,"""")"
+         formulasP(i - 1, 1) = "=IF(ISNUMBER(SEARCH(""Cancelled"", N" & i & ")), ""Cancelled"", XLOOKUP(N" & i & ",'Coupa POs'!A:A,'Coupa POs'!C:C,""""))"
+         formulasQ(i - 1, 1) = "=XLOOKUP(N" & i & ",'Coupa POs'!A:A,'Coupa POs'!G:G,"""")"
+         formulasR(i - 1, 1) = "=IF(P" & i & "=""Cancelled"", ""PO Cancelled"", IF(J" & i & "="""","""", XLOOKUP(J" & i & ",'Coupa Invs'!B:B,'Coupa Invs'!F:F,"""")))"
+         formulasS(i - 1, 1) = "=IF(J" & i & "="""","""",XLOOKUP(J" & i & ",'Coupa Invs'!B:B,'Coupa Invs'!G:G,""""))"
+         formulasT(i - 1, 1) = "=IF(J" & i & "="""","""",XLOOKUP(J" & i & ",'Coupa Invs'!B:B,'Coupa Invs'!E:E,""""))"
+         formulasV(i - 1, 1) = "=IF(J" & i & "="""","""",XLOOKUP(J" & i & ",'Coupa Invs'!B:B,'Coupa Invs'!J:J,""""))"
+         formulasW(i - 1, 1) = "=IF(J" & i & "="""","""",XLOOKUP(J" & i & ",'Coupa Invs'!B:B,'Coupa Invs'!I:I,""""))"
+         formulasX(i - 1, 1) = "=IF(J" & i & "="""","""",XLOOKUP(J" & i & ",'Coupa Invs'!B:B,'Coupa Invs'!K:K,""""))"
+===== NordGuardsTracker e2aa063..HEAD
+2e47438 chore(TenantConfig): declare TenantIdentifierColumns
+ TenantConfig.vb | 9 +++++++++
+ 1 file changed, 9 insertions(+)
+diff --git a/TenantConfig.vb b/TenantConfig.vb
+index 77820f1..c9d7471 100644
+--- a/TenantConfig.vb
++++ b/TenantConfig.vb
+@@ -94,20 +94,29 @@ Public Function TenantColLetter(ByVal concept As String) As String
+         Case "blocker-name":            TenantColLetter = "AG"
+         ' Coupa's own invoice ID, looked up from the PO number. Distinct from any supplier
+         ' invoice number, which this tracker does not ingest at all.
+         Case "coupa-invoice-number":    TenantColLetter = "L"
+         Case Else
+             Err.Raise 5, "TenantColLetter", _
+                 "Unknown column concept '" & concept & "'. Add it to TenantConfig."
+     End Select
+ End Function
+ 
++' no identifier normalization configured yet -- this exists only so this stack compiles
++' (core's NormalizeIdentifierColumns requires every tenant to declare it, ADR-0003). An empty
++' array is a valid no-op: guards raises its PO before any supplier document exists, and the
++' identifier-typing investigation that motivated NormalizeIdentifierColumns never audited this
++' tenant's live data.
++Public Function TenantIdentifierColumns() As Variant
++    TenantIdentifierColumns = Array()
++End Function
++
+ Public Function TenantCol(ByVal concept As String) As Long
+     Dim letters As String
+     Dim i As Long
+     Dim result As Long
+ 
+     letters = UCase$(TenantColLetter(concept))
+     For i = 1 To Len(letters)
+         result = result * 26 + (Asc(Mid$(letters, i, 1)) - 64)
+     Next i
+     TenantCol = result
