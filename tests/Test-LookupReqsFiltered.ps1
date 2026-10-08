@@ -53,19 +53,26 @@ Public Function SetupFilteredSheets() As String
     wsT.Range("A6").Value = "S847": wsT.Range("M6").Value = "KEY-6": wsT.Range("R6").Value = "NOT ME"
     ' Row 7: hidden, fillable.
     wsT.Range("A7").Value = "S001": wsT.Range("M7").Value = "KEY-7"
-    ' Row 8: hidden AND the last row, fillable. A visible-only last-row scan would stop at row 6.
+    ' Row 8: hidden, fillable.
     wsT.Range("A8").Value = "S001": wsT.Range("M8").Value = "KEY-8"
-    wsT.Range("A1:R8").AutoFilter 1, "S847"
+    ' Row 9: hidden AND the last row, fillable, and Coupa holds its REQ # as a true NUMBER. A
+    ' visible-only last-row scan would stop at row 6; a plain Value write would store a Double.
+    wsT.Range("A9").Value = "S001": wsT.Range("M9").Value = "KEY-9"
+    wsT.Range("A1:R9").AutoFilter 1, "S847"
 
     wsR.Range("A1").Value = "Req #": wsR.Range("C1").Value = "Supplier Part Number"
     wsR.Range("A2").Value = "1000003": wsR.Range("C2").Value = "KEY-3"
     wsR.Range("A3").Value = "1000006": wsR.Range("C3").Value = "KEY-6"
     wsR.Range("A4").Value = "1000007": wsR.Range("C4").Value = "KEY-7"
     wsR.Range("A5").Value = "1000008": wsR.Range("C5").Value = "KEY-8"
+    wsR.Range("A6").Value = 1000009: wsR.Range("C6").Value = "KEY-9"
     SetupFilteredSheets = "FilterMode=" & CStr(wsT.FilterMode)
 End Function
 Public Function ReadCell(ByVal ref As String) As String
     ReadCell = CStr(ThisWorkbook.Sheets("Invoices").Range(ref).Value)
+End Function
+Public Function ReadCellType(ByVal ref As String) As String
+    ReadCellType = TypeName(ThisWorkbook.Sheets("Invoices").Range(ref).Value)
 End Function
 Public Function ReadFilterMode() As String
     ReadFilterMode = CStr(ThisWorkbook.Sheets("Invoices").FilterMode)
@@ -78,6 +85,7 @@ End Sub
 $sources = @(
     $stub,
     (Join-Path $repo 'LookupReqs.vb'),
+    (Join-Path $repo 'CoerceValues.vb'),
     (Join-Path $repo 'GetHeaderColumnIndexes.vb'),
     (Join-Path $repo 'UnprotectSheet.vb'),
     (Join-Path $repo 'ProtectSheet.vb')
@@ -96,7 +104,11 @@ try {
     Assert-Equal -Expected '1108423' -Actual (& $read 'R5') -Because 'an existing REQ # on a visible row is untouched'
     Assert-Equal -Expected 'NOT ME'  -Actual (& $read 'R6') -Because 'a marker survives even though Coupa knows its key'
     Assert-Equal -Expected '1000007' -Actual (& $read 'R7') -Because 'a hidden blank row is filled too'
-    Assert-Equal -Expected '1000008' -Actual (& $read 'R8') -Because 'a hidden trailing row is still scanned and filled'
+    Assert-Equal -Expected '1000008' -Actual (& $read 'R8') -Because 'a hidden blank row is filled too (second one)'
+    Assert-Equal -Expected '1000009' -Actual (& $read 'R9') -Because 'a hidden trailing row is still scanned and filled'
+    $type = { param($ref) Invoke-VbaFunction -VbaHost $vba -Name 'ReadCellType' -Arguments @($ref) -TimeoutSeconds 60 }
+    Assert-Equal -Expected 'String' -Actual (& $type 'R3') -Because 'a REQ # written from text stays text'
+    Assert-Equal -Expected 'String' -Actual (& $type 'R9') -Because 'a REQ # Coupa holds as a NUMBER is written as text, not a Double'
     Assert-Equal -Expected 'True' -Actual (Invoke-VbaFunction -VbaHost $vba -Name 'ReadFilterMode' -TimeoutSeconds 60) `
                  -Because 'the operator''s filter is still on afterwards'
 } finally { if ($vba) { Remove-VbaHost -VbaHost $vba | Out-Null }; Remove-Item $stub -Force -ErrorAction SilentlyContinue }
