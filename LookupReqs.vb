@@ -158,17 +158,14 @@ Public Sub LookupReqs(Optional ByVal announce As Boolean = True, _
     ' (no value, no format), so the co-authors' view of the column does not churn. Same rule and
     ' same remedy as NormalizeIdentifierColumns.vb.
     '
-    ' Text format is set on each cell before assigning: on a General cell, writing a numeric-looking
-    ' value (e.g. a REQ # copied straight from Coupa Reqs) re-numericizes it, exactly as if a person
-    ' had typed it in -- silently breaking every XLOOKUP keyed on this column against the Coupa
-    ' sheets, whose keys are text. Matches CopyPaymentNums.vb and UpdateSearchValues.
-    Dim target As Range
+    ' Every REQ # is written as TEXT, whatever type Coupa Reqs handed back: WriteIdentifier sets the
+    ' cell to text format and converts the value the way =TEXT(value,"0") would (a number becomes its
+    ' digits, never scientific notation). Identifiers are strings; only amounts and dates are numbers.
+    ' On a General cell a numeric-looking value would be re-numericized exactly as if a person had
+    ' typed it, silently breaking every XLOOKUP keyed on this column against the Coupa sheets, whose
+    ' keys are text.
     For i = 1 To UBound(trackerReqNums, 1)
-        If filled(i) Then
-            Set target = wsTracker.Cells(i + 1, colTrackerReq)
-            target.NumberFormat = "@"
-            target.Value = trackerReqNums(i, 1)
-        End If
+        If filled(i) Then WriteIdentifier wsTracker.Cells(i + 1, colTrackerReq), trackerReqNums(i, 1)
     Next i
 
     If manageProtection Then ProtectSheet

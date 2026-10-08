@@ -192,6 +192,10 @@ columns (a bulk read returns hidden rows too), finds the last row from `UsedRang
 element. Hidden rows are filled like any other, and the filter is left on.
 `tests/Test-LookupReqsFiltered.ps1` locks this in.
 
+Every REQ # it writes goes through `WriteIdentifier`, so it lands as **text** whatever type Coupa
+Reqs held (a number becomes its digits, as `=TEXT(value,"0")` would). Identifiers are strings; only
+amounts and dates are numbers.
+
 ## Normalizing identifier columns
 
 `NormalizeIdentifierColumns.vb` keeps REQ #, invoice numbers, and payment # as text on the
