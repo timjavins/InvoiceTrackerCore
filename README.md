@@ -185,6 +185,13 @@ A tenant whose `req-join-key` entry is missing or broken degrades quietly to the
 raises the same error for an unknown concept, and core has no way to tell that apart from a real
 defect in the tenant's config.
 
+`LookupReqs` is safe to run while the operator has an AutoFilter on the tracker. It reads whole
+columns (a bulk read returns hidden rows too), finds the last row from `UsedRange` rather than
+`End(xlUp)`, and writes back **only the cells it fills, one at a time** — never a bulk
+`Range.Value = array`, which under an active filter hands every visible cell the array's first
+element. Hidden rows are filled like any other, and the filter is left on.
+`tests/Test-LookupReqsFiltered.ps1` locks this in.
+
 ## Normalizing identifier columns
 
 `NormalizeIdentifierColumns.vb` keeps REQ #, invoice numbers, and payment # as text on the

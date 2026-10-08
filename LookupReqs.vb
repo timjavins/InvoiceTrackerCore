@@ -91,9 +91,12 @@ Public Sub LookupReqs(Optional ByVal announce As Boolean = True, _
     colReqNum = reqsHeaders("Req #")
     colPartNum = reqsHeaders("Supplier Part Number")
 
+    ' UsedRange's extent comes from content, not visibility. End(xlUp) walks visible cells only, so
+    ' with the operator's AutoFilter on it would stop above a filtered-out trailing row and never
+    ' fill it. Same trap, same remedy as NormalizeIdentifierColumns.vb.
     Dim lastRow As Long, lastRowReqs As Long
-    lastRow = wsTracker.Cells(wsTracker.Rows.Count, colTrackerInvoice).End(xlUp).Row
-    lastRowReqs = wsCoupaReqs.Cells(wsCoupaReqs.Rows.Count, colReqNum).End(xlUp).Row
+    lastRow = wsTracker.UsedRange.Row + wsTracker.UsedRange.Rows.Count - 1
+    lastRowReqs = wsCoupaReqs.UsedRange.Row + wsCoupaReqs.UsedRange.Rows.Count - 1
 
     If lastRow < 2 Or lastRowReqs < 2 Then Exit Sub
 
@@ -102,7 +105,7 @@ Public Sub LookupReqs(Optional ByVal announce As Boolean = True, _
         UnprotectSheet
     End If
 
-    ' Read both sides into memory; write the tracker column back in one operation.
+    ' Read both sides into memory; write back only the cells that get filled (see below).
     Dim coupaReqNums As Variant, coupaPartNums As Variant
     coupaReqNums = wsCoupaReqs.Range(wsCoupaReqs.Cells(2, colReqNum), _
                                      wsCoupaReqs.Cells(lastRowReqs, colReqNum)).Value
@@ -131,24 +134,42 @@ Public Sub LookupReqs(Optional ByVal announce As Boolean = True, _
 
     Dim foundCount As Long
     Dim invoiceNum As String
+    Dim filled() As Boolean
+    ReDim filled(1 To UBound(trackerReqNums, 1))
     For i = 1 To UBound(trackerReqNums, 1)
         If IsBlankRequisition(trackerReqNums(i, 1)) Then
             invoiceNum = Trim$(CStr(trackerInvoices(i, 1)))
             If Len(invoiceNum) > 0 Then
                 If reqLookup.Exists(invoiceNum) Then
                     trackerReqNums(i, 1) = reqLookup(invoiceNum)
+                    filled(i) = True
                     foundCount = foundCount + 1
                 End If
             End If
         End If
     Next i
 
-    ' Set text format before assigning: on a General cell, writing a numeric-looking value
-    ' (e.g. a REQ # copied straight from Coupa Reqs) re-numericizes it, exactly as if a person
-    ' had typed it in -- silently breaking every XLOOKUP keyed on this column against the
-    ' Coupa sheets, whose keys are text. Matches CopyPaymentNums.vb and UpdateSearchValues.
-    wsTracker.Range(colTrackerReq & "2:" & colTrackerReq & lastRow).NumberFormat = "@"
-    wsTracker.Range(colTrackerReq & "2:" & colTrackerReq & lastRow).Value = trackerReqNums
+    ' Write only the cells that were filled, one at a time. Reading the whole column above is
+    ' filter-safe (a bulk read returns hidden rows too); a bulk Range.Value = array write is NOT:
+    ' while an AutoFilter is active, Excel does not map array rows to sheet rows. Measured on the
+    ' guards tracker 2026-10-07 -- every visible cell received the array's FIRST element, which
+    ' overwrote existing REQ #s and filled unmatched blanks with another row's number. Writing a
+    ' single cell reaches hidden rows as well, and leaves every cell it did not fill untouched
+    ' (no value, no format), so the co-authors' view of the column does not churn. Same rule and
+    ' same remedy as NormalizeIdentifierColumns.vb.
+    '
+    ' Text format is set on each cell before assigning: on a General cell, writing a numeric-looking
+    ' value (e.g. a REQ # copied straight from Coupa Reqs) re-numericizes it, exactly as if a person
+    ' had typed it in -- silently breaking every XLOOKUP keyed on this column against the Coupa
+    ' sheets, whose keys are text. Matches CopyPaymentNums.vb and UpdateSearchValues.
+    Dim target As Range
+    For i = 1 To UBound(trackerReqNums, 1)
+        If filled(i) Then
+            Set target = wsTracker.Cells(i + 1, colTrackerReq)
+            target.NumberFormat = "@"
+            target.Value = trackerReqNums(i, 1)
+        End If
+    Next i
 
     If manageProtection Then ProtectSheet
 
