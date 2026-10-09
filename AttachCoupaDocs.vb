@@ -41,6 +41,7 @@ Sub AttachCoupaDocs()
     Dim successCount As Long
     Dim failCount As Long
     Dim notFoundCount As Long
+    Dim logFileNum As Integer
 
     ' Prompt for configuration at runtime
     selectedFolder = PickFolder("Select the directory that contains the requisition PDF files.")
@@ -73,23 +74,27 @@ Sub AttachCoupaDocs()
     notFoundCount = 0
     Set skippedReqs = New Collection
 
+    logFileNum = OpenAttachLog()
+    LogLine logFileNum, "=== AttachCoupaDocs run started. targetDate=" & targetDate & _
+        ", pdfSourceDir=" & pdfSourceDir & " ==="
+
     ' Initialize WebDriver
-    Debug.Print "Initializing web driver"
+    LogLine logFileNum, "Initializing web driver"
     Set driver = New WebDriver
-    Debug.Print "Starting web driver"
+    LogLine logFileNum, "Starting web driver"
 
     On Error GoTo DriverError
     driver.Start "chrome", ""
     On Error GoTo 0
 
-    Debug.Print "Maximizing window"
+    LogLine logFileNum, "Maximizing window"
     driver.Window.Maximize
 
     ' Navigate to custom Coupa view (filter=-4814 includes Created Date column)
     Dim filteredUrl As String
     filteredUrl = "https://" & TenantCoupaHost() & "/user/account?filter=" & TenantCoupaFilterId()
 
-    Debug.Print "Navigating to Coupa custom view"
+    LogLine logFileNum, "Navigating to Coupa custom view"
     driver.Get filteredUrl
 
     ' Wait for login
@@ -111,20 +116,20 @@ Sub AttachCoupaDocs()
     Application.Wait Now + TimeValue("0:00:03")
     ' Loop: repeatedly fetch the custom view and process any draft requisitions
     Do
-        Debug.Print "Extracting requisitions created on " & targetDate
+        LogLine logFileNum, "Extracting requisitions created on " & targetDate
         Set draftReqs = GetDraftRequisitionsByDate(driver, targetDate, TenantSupplierKeyword(), skippedReqs)
 
         If draftReqs.Count = 0 Then
-            Debug.Print "No more processable draft requisitions found for " & targetDate
+            LogLine logFileNum, "No more processable draft requisitions found for " & targetDate
             Exit Do
         End If
 
-        Debug.Print "Found " & draftReqs.Count & " draft requisitions to process"
+        LogLine logFileNum, "Found " & draftReqs.Count & " draft requisitions to process"
 
         ' Process each draft requisition found in this batch
         For Each req In draftReqs
             reqId = req
-            Debug.Print "Processing requisition: " & reqId
+            LogLine logFileNum, "Processing requisition: " & reqId
 
             ' Navigate to edit page
             driver.Get "https://" & TenantCoupaHost() & "/requisition_headers/" & reqId & "/edit"
@@ -140,7 +145,7 @@ Sub AttachCoupaDocs()
             Loop
 
             If submitBtn Is Nothing Then
-                Debug.Print "  [SKIP] Page did not load within timeout for " & reqId
+                LogLine logFileNum, "  [SKIP] Page did not load within timeout for " & reqId
                 failCount = failCount + 1
                 MarkReqSkipped skippedReqs, reqId
                 GoTo NextReq
@@ -150,29 +155,29 @@ Sub AttachCoupaDocs()
             partNumber = ExtractPartNumber(driver)
 
             If partNumber = "" Then
-                Debug.Print "  [SKIP] Could not extract part number from " & reqId
+                LogLine logFileNum, "  [SKIP] Could not extract part number from " & reqId
                 failCount = failCount + 1
                 MarkReqSkipped skippedReqs, reqId
                 GoTo NextReq
             End If
 
-            Debug.Print "  Part number: " & partNumber
+            LogLine logFileNum, "  Part number: " & partNumber
 
             ' Check if PDF exists
             pdfPath = pdfSourceDir & partNumber & ".pdf"
             If Dir(pdfPath) = "" Then
-                Debug.Print "  [NOT FOUND] " & partNumber & ".pdf"
+                LogNotFound logFileNum, reqId, partNumber, pdfPath
                 notFoundCount = notFoundCount + 1
                 MarkReqSkipped skippedReqs, reqId
                 GoTo NextReq
             End If
 
             ' Attach file and submit
-            If AttachFileAndSubmit(driver, pdfPath) Then
-                Debug.Print "  [SUCCESS] Attached and submitted " & reqId
+            If AttachFileAndSubmit(driver, pdfPath, logFileNum) Then
+                LogLine logFileNum, "  [SUCCESS] Attached and submitted " & reqId
                 successCount = successCount + 1
             Else
-                Debug.Print "  [FAILED] Could not attach/submit " & reqId
+                LogLine logFileNum, "  [FAILED] Could not attach/submit " & reqId
                 failCount = failCount + 1
                 MarkReqSkipped skippedReqs, reqId
             End If
@@ -188,6 +193,10 @@ NextReq:
         Application.Wait Now + TimeValue("0:00:03")
     Loop
 
+    LogLine logFileNum, "=== Run complete. Submitted=" & successCount & _
+        ", Failed=" & failCount & ", Not Found=" & notFoundCount & " ==="
+    Close #logFileNum
+
     ' Show summary
     MsgBox "Processing complete!" & vbCrLf & vbCrLf & _
            "Submitted: " & successCount & vbCrLf & _
@@ -198,10 +207,11 @@ NextReq:
     Exit Sub
 
 DriverError:
-    Debug.Print "Driver error: " & Err.Description
+    LogLine logFileNum, "Driver error: " & Err.Description
+    Close #logFileNum
     ' The form class lives in the variant, since VBA binds it at compile time.
     ShowWebDriverError Err.Description
-    
+
     Exit Sub
 
 UserLogin:
@@ -226,10 +236,38 @@ UserLogin:
             End If
         End If
     Else
+        LogLine logFileNum, "Login not confirmed. Exiting script."
+        Close #logFileNum
         MsgBox "Login not confirmed. Exiting script.", vbExclamation
         driver.Quit
         Exit Sub
     End If
+
+    ' Reached only if the user confirmed login but it never completed, or completed with no
+    ' remaining drafts for targetDate -- the loop above has nothing left to Resume into.
+    Close #logFileNum
+End Sub
+
+' Opens a per-run log for AttachCoupaDocs in Downloads, appending so same-day runs share one file.
+' Debug.Print alone leaves no record of WHICH requisitions were not found: the Immediate Window is
+' not saved and clears on restart. Callers must Close the returned file number on every exit path.
+Public Function OpenAttachLog() As Integer
+    Dim fileNum As Integer
+    fileNum = FreeFile
+    Open VBA.Environ("USERPROFILE") & "\Downloads\Coupa attach log " & Format(Date, "yyyymmdd") & ".txt" For Append As #fileNum
+    OpenAttachLog = fileNum
+End Function
+
+' Writes one timestamped line to the attach log and mirrors it to the Immediate Window.
+Public Sub LogLine(ByVal logFileNum As Integer, ByVal message As String)
+    Debug.Print message
+    If logFileNum <> 0 Then
+        Print #logFileNum, Format(Now, "yyyy-mm-dd hh:nn:ss") & vbTab & message
+    End If
+End Sub
+
+Public Sub LogNotFound(ByVal logFileNum As Integer, ByVal reqId As String, ByVal partNumber As String, ByVal pdfPath As String)
+    LogLine logFileNum, "  [NOT FOUND] " & partNumber & ".pdf (reqId=" & reqId & ", expected=" & pdfPath & ")"
 End Sub
 
 ' Prompt the user for a target date and validate MM/DD/YYYY format.
@@ -370,7 +408,7 @@ Function ExtractPartNumber(driver As WebDriver) As String
 End Function
 
 ' Attach PDF file and submit requisition
-Function AttachFileAndSubmit(driver As WebDriver, pdfPath As String) As Boolean
+Function AttachFileAndSubmit(driver As WebDriver, pdfPath As String, ByVal logFileNum As Integer) As Boolean
     Dim attachLink As WebElement
     Dim fileInput As WebElement
     Dim checkbox As WebElement
@@ -387,7 +425,7 @@ Function AttachFileAndSubmit(driver As WebDriver, pdfPath As String) As Boolean
     Set attachLink = driver.FindElementByCss(".attachments.attachified a.file-attachment")
 
     If attachLink Is Nothing Then
-        Debug.Print "  [ERROR] Requisition file attachment link not found"
+        LogLine logFileNum, "  [ERROR] Requisition file attachment link not found"
         AttachFileAndSubmit = False
         Exit Function
     End If
@@ -432,7 +470,7 @@ Function AttachFileAndSubmit(driver As WebDriver, pdfPath As String) As Boolean
     Loop
 
     If Not success Then
-        Debug.Print "  [ERROR] File upload did not complete within timeout"
+        LogLine logFileNum, "  [ERROR] File upload did not complete within timeout"
         AttachFileAndSubmit = False
         Exit Function
     End If
@@ -455,6 +493,6 @@ Function AttachFileAndSubmit(driver As WebDriver, pdfPath As String) As Boolean
     Exit Function
 
 AttachError:
-    Debug.Print "Error in AttachFileAndSubmit: " & Err.Description
+    LogLine logFileNum, "Error in AttachFileAndSubmit: " & Err.Description
     AttachFileAndSubmit = False
 End Function
