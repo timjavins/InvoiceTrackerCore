@@ -27,8 +27,17 @@
 '
 ' rowValues is 1-based or otherwise contiguous over some LBound..UBound; only the bounds and
 ' contents matter, not the base.
+'
+' moneyCols, when given, is an array of the column numbers (the same numbering as rowValues'
+' own index) that hold dollar amounts, and only those columns feed the amount signal. Without
+' it every column does, and that is wrong for a real export: a text invoice # such as
+' "0906964326" or a date serial such as 46240 coerces to a "money" value far larger than any
+' footer total, so the footer is never the largest amount and the signal can never fire. The
+' label-less footer (everything blank but SUBTOTAL / SALES TAX / TOTAL) then has only the
+' sparse signal left and is mistaken for a real row.
 Public Function RowValuesLookLikeSummary(ByVal rowValues As Variant, _
-                                         ByVal maxAmountInBlock As Double) As Boolean
+                                         ByVal maxAmountInBlock As Double, _
+                                         Optional ByVal moneyCols As Variant) As Boolean
     Dim c As Long
     Dim v As Variant
     Dim text As String
@@ -61,10 +70,12 @@ Public Function RowValuesLookLikeSummary(ByVal rowValues As Variant, _
                         hasLabel = True
                 End Select
 
-                amt = CoerceMoney(v, ok)
-                If ok And amt > 0 Then
-                    hasMoney = True
-                    If amt >= maxAmountInBlock Then hasMaxAmount = True
+                If IsMoneyColumn(c, moneyCols) Then
+                    amt = CoerceMoney(v, ok)
+                    If ok And amt > 0 Then
+                        hasMoney = True
+                        If amt >= maxAmountInBlock Then hasMaxAmount = True
+                    End If
                 End If
             End If
         End If
@@ -78,13 +89,26 @@ Public Function RowValuesLookLikeSummary(ByVal rowValues As Variant, _
     RowValuesLookLikeSummary = (signals >= 2)
 End Function
 
+' True when column c should count toward the amount signal: always, if the caller named no
+' money columns; otherwise only if c is one of them.
+Private Function IsMoneyColumn(ByVal c As Long, ByVal moneyCols As Variant) As Boolean
+    Dim i As Long
+    If IsMissing(moneyCols) Then IsMoneyColumn = True: Exit Function
+    If Not IsArray(moneyCols) Then IsMoneyColumn = True: Exit Function
+    For i = LBound(moneyCols) To UBound(moneyCols)
+        If CLng(moneyCols(i)) = c Then IsMoneyColumn = True: Exit Function
+    Next i
+End Function
+
 ' Worksheet entry point. rawLastRow is a caller's own coarse starting guess (however they
 ' found it -- End(xlUp) on any column, UsedRange, etc.); this walks upward from there,
 ' skipping any trailing blank row or one RowValuesLookLikeSummary calls a summary row, and
 ' returns the first row that is neither. Never returns a row at or above headerRow.
+' moneyCols: see RowValuesLookLikeSummary -- pass the SUBTOTAL / SALES TAX / TOTAL column numbers.
 Public Function LastRealDataRow(ByVal ws As Worksheet, ByVal rawLastRow As Long, _
                                 ByVal headerRow As Long, ByVal firstCol As Long, _
-                                ByVal lastCol As Long) As Long
+                                ByVal lastCol As Long, _
+                                Optional ByVal moneyCols As Variant) As Long
     If rawLastRow <= headerRow Then
         LastRealDataRow = rawLastRow
         Exit Function
@@ -98,8 +122,10 @@ Public Function LastRealDataRow(ByVal ws As Worksheet, ByVal rawLastRow As Long,
     Dim r As Long, c As Long, amt As Double, ok As Boolean
     For r = headerRow + 1 To rawLastRow
         For c = firstCol To lastCol
-            amt = CoerceMoney(ws.Cells(r, c).Value, ok)
-            If ok And amt > maxAmount Then maxAmount = amt
+            If IsMoneyColumn(c, moneyCols) Then
+                amt = CoerceMoney(ws.Cells(r, c).Value, ok)
+                If ok And amt > maxAmount Then maxAmount = amt
+            End If
         Next c
     Next r
 
@@ -118,7 +144,7 @@ Public Function LastRealDataRow(ByVal ws As Worksheet, ByVal rawLastRow As Long,
             End If
         Next c
 
-        If rowBlank Or RowValuesLookLikeSummary(rowValues, maxAmount) Then
+        If rowBlank Or RowValuesLookLikeSummary(rowValues, maxAmount, moneyCols) Then
             lastRow = lastRow - 1
         Else
             Exit Do
@@ -133,7 +159,8 @@ End Function
 ' 1-based, row-major 2D array. Same contract as LastRealDataRow otherwise.
 Public Function LastRealDataRowInArray(ByVal sourceData As Variant, ByVal rawLastRow As Long, _
                                        ByVal headerRow As Long, ByVal firstCol As Long, _
-                                       ByVal lastCol As Long) As Long
+                                       ByVal lastCol As Long, _
+                                       Optional ByVal moneyCols As Variant) As Long
     If rawLastRow <= headerRow Then
         LastRealDataRowInArray = rawLastRow
         Exit Function
@@ -147,8 +174,10 @@ Public Function LastRealDataRowInArray(ByVal sourceData As Variant, ByVal rawLas
     Dim r As Long, c As Long, amt As Double, ok As Boolean
     For r = headerRow + 1 To rawLastRow
         For c = firstCol To lastCol
-            amt = CoerceMoney(sourceData(r, c), ok)
-            If ok And amt > maxAmount Then maxAmount = amt
+            If IsMoneyColumn(c, moneyCols) Then
+                amt = CoerceMoney(sourceData(r, c), ok)
+                If ok And amt > maxAmount Then maxAmount = amt
+            End If
         Next c
     Next r
 
@@ -167,7 +196,7 @@ Public Function LastRealDataRowInArray(ByVal sourceData As Variant, ByVal rawLas
             End If
         Next c
 
-        If rowBlank Or RowValuesLookLikeSummary(rowValues, maxAmount) Then
+        If rowBlank Or RowValuesLookLikeSummary(rowValues, maxAmount, moneyCols) Then
             lastRow = lastRow - 1
         Else
             Exit Do

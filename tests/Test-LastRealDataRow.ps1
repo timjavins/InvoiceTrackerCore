@@ -79,7 +79,17 @@ $wsDriver = Join-Path $env:TEMP 'LrdrWsDriver.vb'
 Public Function T_Worksheet(ByVal packed As String) As Long
     Dim parts As Variant
     parts = Split(packed, "|")
-    T_Worksheet = LastRealDataRow(ThisWorkbook.Worksheets(1), CLng(parts(0)), CLng(parts(1)), 1, CLng(parts(2)))
+    If UBound(parts) >= 3 Then
+        Dim names As Variant, mc() As Variant, i As Long
+        names = Split(parts(3), ",")
+        ReDim mc(0 To UBound(names))
+        For i = 0 To UBound(names)
+            mc(i) = CLng(names(i))
+        Next i
+        T_Worksheet = LastRealDataRow(ThisWorkbook.Worksheets(1), CLng(parts(0)), CLng(parts(1)), 1, CLng(parts(2)), mc)
+    Else
+        T_Worksheet = LastRealDataRow(ThisWorkbook.Worksheets(1), CLng(parts(0)), CLng(parts(1)), 1, CLng(parts(2)))
+    End If
 End Function
 '@ | Set-Content -LiteralPath $wsDriver -Encoding UTF8
 
@@ -147,6 +157,53 @@ try {
     $result = Invoke-VbaFunction -VbaHost $vba -Name 'T_Worksheet' -Arguments @('3|1|3') -TimeoutSeconds 30
     Assert-Equal 3 $result -Because 'a real, fully-populated last row is not excluded just for holding the largest single amount'
 } finally { Remove-VbaHost -VbaHost $vba | Out-Null }
+
+# Live shape (2026-10-08, Securitas July RMR re-send): the footer carries NO label and is blank
+# everywhere except the three money columns, so the label signal never fires and "sparse" is the
+# only signal left -- unless the largest-amount signal works. It could not: the max-amount scan
+# read EVERY column, and a text invoice # like "0906964326" (906,964,326) and date serials
+# (46,240) dwarf the footer's 27,511.33, so the footer was never "the largest amount" and the
+# row was treated as real (STORE # blank -> "blank cell" rejection).
+function Set-LiveFooterFixture($ws) {
+    # Columns: 1 STORE #, 2 INV DATE, 3 INVOICE # (text), 4 SUBTOTAL, 5 SALES TAX, 6 TOTAL
+    $ws.Columns(3).NumberFormat = '@'
+    Set-Cell $ws 1 1 'STORE #'; Set-Cell $ws 1 2 'INV DATE'; Set-Cell $ws 1 3 'INVOICE #'
+    Set-Cell $ws 1 4 'SUBTOTAL'; Set-Cell $ws 1 5 'SALES TAX'; Set-Cell $ws 1 6 'TOTAL'
+    Set-Cell $ws 2 1 '0001'; Set-Cell $ws 2 2 46240; Set-Cell $ws 2 3 '0906964326'
+    Set-Cell $ws 2 4 93.61; Set-Cell $ws 2 5 9.89; Set-Cell $ws 2 6 103.50
+    Set-Cell $ws 3 1 '7771'; Set-Cell $ws 3 2 46240; Set-Cell $ws 3 3 '0906964326'
+    Set-Cell $ws 3 4 52.00; Set-Cell $ws 3 5 0; Set-Cell $ws 3 6 52.00
+    # Row 4: label-less footer, money columns only. Rows 5-6: blank tail UsedRange over-includes.
+    Set-Cell $ws 4 4 145.61; Set-Cell $ws 4 5 9.89; Set-Cell $ws 4 6 155.50
+}
+
+$vba = New-VbaHost -SourceFiles ($sources + $wsDriver)
+try {
+    Set-LiveFooterFixture $vba.Workbook.Worksheets(1)
+    $result = Invoke-VbaFunction -VbaHost $vba -Name 'T_Worksheet' -Arguments @('6|1|6|4,5,6') -TimeoutSeconds 30
+    Assert-Equal 3 $result -Because 'a label-less footer holding only the money columns is excluded when the caller names its money columns'
+} finally { Remove-VbaHost -VbaHost $vba | Out-Null }
+
+# Money columns scoped: a big identifier or date elsewhere in the row must not make the footer
+# look small. Without the money-column list, behavior is unchanged (old all-column scan).
+$vba = New-VbaHost -SourceFiles ($sources + $wsDriver)
+try {
+    Set-LiveFooterFixture $vba.Workbook.Worksheets(1)
+    $result = Invoke-VbaFunction -VbaHost $vba -Name 'T_Worksheet' -Arguments @('6|1|6') -TimeoutSeconds 30
+    Assert-Equal 4 $result -Because 'without a money-column list the legacy all-column scan is kept (documents why callers should pass one)'
+} finally { Remove-VbaHost -VbaHost $vba | Out-Null }
+
+# False-positive guard with money columns named: a dense real last row that holds the batch's
+# largest money amount is still a real row (only one signal).
+$vba = New-VbaHost -SourceFiles ($sources + $wsDriver)
+try {
+    $ws = $vba.Workbook.Worksheets(1)
+    Set-LiveFooterFixture $ws
+    Set-Cell $ws 4 1 '9000'; Set-Cell $ws 4 2 46240; Set-Cell $ws 4 3 '0906964326'
+    Set-Cell $ws 4 4 5000; Set-Cell $ws 4 5 0; Set-Cell $ws 4 6 5000
+    $result = Invoke-VbaFunction -VbaHost $vba -Name 'T_Worksheet' -Arguments @('6|1|6|4,5,6') -TimeoutSeconds 30
+    Assert-Equal 4 $result -Because 'a fully populated last row is not excluded just for holding the largest money amount'
+} finally { Remove-VbaHost -VbaHost $vba | Out-Null }
 Remove-Item $wsDriver -Force -ErrorAction SilentlyContinue
 
 # --- Array entry point: parity with the worksheet path on the live fixture's shape ----------
@@ -174,7 +231,17 @@ Public Function T_Array(ByVal packed As String) As Long
         Next c
     Next r
 
-    T_Array = LastRealDataRowInArray(data, UBound(data, 1), headerRow, 1, lastCol)
+    If UBound(fields) >= 3 Then
+        Dim names As Variant, mc() As Variant, i As Long
+        names = Split(fields(3), ",")
+        ReDim mc(0 To UBound(names))
+        For i = 0 To UBound(names)
+            mc(i) = CLng(names(i))
+        Next i
+        T_Array = LastRealDataRowInArray(data, UBound(data, 1), headerRow, 1, lastCol, mc)
+    Else
+        T_Array = LastRealDataRowInArray(data, UBound(data, 1), headerRow, 1, lastCol)
+    End If
 End Function
 '@ | Set-Content -LiteralPath $arrDriver -Encoding UTF8
 
@@ -184,6 +251,14 @@ try {
     $packed = 'STORE #|BILL CODE|SUBTOTAL;234|6200042863|330.00;600|6200041701|416.28;Grand Total||746.28~1~3'
     $result = Invoke-VbaFunction -VbaHost $vba -Name 'T_Array' -Arguments @($packed) -TimeoutSeconds 30
     Assert-Equal 3 $result -Because 'the array entry point (JCI''s shape) excludes the same Grand Total row the worksheet entry point does'
+} finally { Remove-VbaHost -VbaHost $vba | Out-Null }
+
+$vba = New-VbaHost -SourceFiles ($sources + $arrDriver)
+try {
+    # Live footer shape: label-less, money columns only; big text invoice # and date serial.
+    $packed = 'STORE #|INV DATE|INVOICE #|SUBTOTAL|SALES TAX|TOTAL;0001|46240|0906964326|93.61|9.89|103.50;7771|46240|0906964326|52.00|0|52.00;||||9.89|155.50~1~6~4,5,6'
+    $result = Invoke-VbaFunction -VbaHost $vba -Name 'T_Array' -Arguments @($packed) -TimeoutSeconds 30
+    Assert-Equal 3 $result -Because 'the array entry point also excludes a label-less money-only footer when money columns are named'
 } finally { Remove-VbaHost -VbaHost $vba | Out-Null }
 Remove-Item $arrDriver -Force -ErrorAction SilentlyContinue
 
