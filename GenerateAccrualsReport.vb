@@ -8,14 +8,17 @@
 ' 1. INVOICE TYPE is not one of TenantAccrualExcludedInvoiceTypes()
 ' 2. INV Approval Date is blank or after the cut-off date (the last day of the fiscal month chosen
 '    at the prompt; see AskForCutoffDate)
-' 3. BU is one of TenantAccrualBusinessUnits()
-' 4. REQ # is blank or numeric (text values like "N/A" or "PENDING" are excluded)
-' 5. PO STATUS does not contain "Cancelled" or "Closed"
-' 6. ORDER DATE is blank or after (cut-off date - 13 weeks) [13-week sheet only]
+' 3. REQUEST DATE is blank or on or before the cut-off date (a bill requested after the cut-off
+'    belongs to a later period). Only the date part counts: a request stamped 2 pm on the cut-off day
+'    is not "after" it.
+' 4. BU is one of TenantAccrualBusinessUnits()
+' 5. REQ # is blank or numeric (text values like "N/A" or "PENDING" are excluded)
+' 6. PO STATUS does not contain "Cancelled" or "Closed"
+' 7. ORDER DATE is blank or after (cut-off date - 13 weeks) [13-week sheet only]
 '
 ' Output: New workbook with two sheets:
-'   "T - 3 mos." - records matching all 6 criteria (13-week window)
-'   "YTD"        - records matching criteria 1-5 (full fiscal year to cutoff)
+'   "T - 3 mos." - records matching all 7 criteria (13-week window)
+'   "YTD"        - records matching criteria 1-6 (full fiscal year to cutoff)
 ' Workbook saved to "Downloads" folder.
 '
 ' Columns are read through TenantColLetter concepts, never by letter. Rows whose formula columns hold
@@ -48,6 +51,10 @@ Sub GenerateAccrualsReport()
     Const COL_PO_STATUS As Long = 10
     Const COL_APPROVAL As Long = 12
     Dim src(1 To 13) As Variant
+
+    ' REQUEST DATE is filtered on but not reported, so it is read apart from the output columns.
+    Dim colRequest As Variant
+    Dim requestText As String
 
     ' 13-week output array
     Dim outputArr() As Variant
@@ -127,6 +134,7 @@ Sub GenerateAccrualsReport()
     For h = 1 To 13
         src(h) = ColumnValues(ws, TenantColLetter(CStr(concepts(h - 1))), 2, lastRow)
     Next h
+    colRequest = ColumnValues(ws, TenantColLetter("request-date"), 2, lastRow)
 
     ' Initialize output arrays (max size = source data size)
     ReDim outputArr(1 To UBound(src(1), 1) + 1, 1 To 13)
@@ -171,7 +179,15 @@ Sub GenerateAccrualsReport()
             If CDate(approvalText) <= cutoffDate Then GoTo NextRow
         End If
 
-        ' Criterion 3: BU is one of the tenant's in-scope business units
+        ' Criterion 3: REQUEST DATE is blank or on or before the cut-off date. Int drops any time
+        ' part. An error value reads as blank (SafeText), so the row is kept rather than guessed at.
+        requestText = SafeText(colRequest(i, 1))
+        If Len(requestText) > 0 Then
+            If Not IsDate(requestText) Then GoTo NextRow
+            If Int(CDate(requestText)) > cutoffDate Then GoTo NextRow
+        End If
+
+        ' Criterion 4: BU is one of the tenant's in-scope business units
         buText = SafeText(src(COL_BU)(i, 1))
         inScope = False
         For k = LBound(businessUnits) To UBound(businessUnits)
@@ -179,20 +195,20 @@ Sub GenerateAccrualsReport()
         Next k
         If Not inScope Then GoTo NextRow
 
-        ' Criterion 4: REQ # is blank or numeric (skip non-blank text values)
+        ' Criterion 5: REQ # is blank or numeric (skip non-blank text values)
         reqVal = SafeText(src(COL_REQ)(i, 1))
         If reqVal <> "" And Not IsNumeric(reqVal) Then
             GoTo NextRow
         End If
 
-        ' Criterion 5: PO STATUS does not contain "Cancelled" or "Closed"
+        ' Criterion 6: PO STATUS does not contain "Cancelled" or "Closed"
         poStatus = SafeText(src(COL_PO_STATUS)(i, 1))
         If InStr(1, poStatus, "Cancelled", vbTextCompare) > 0 Or _
            InStr(1, poStatus, "Closed", vbTextCompare) > 0 Then
             GoTo NextRow
         End If
 
-        ' Criterion 6: validate ORDER DATE; skip both sheets if the value is not a date.
+        ' Criterion 7: validate ORDER DATE; skip both sheets if the value is not a date.
         ' IsDate rather than an On Error Resume Next around CDate, so the loop never disarms the
         ' handler armed above.
         orderText = SafeText(src(COL_ORDER_DATE)(i, 1))
@@ -205,7 +221,7 @@ Sub GenerateAccrualsReport()
             orderDate = CDate(orderText)
         End If
 
-        ' Criteria 1-5 passed and ORDER DATE valid — add to YTD (no date window for YTD)
+        ' Criteria 1-6 passed and ORDER DATE valid — add to YTD (no date window for YTD)
         For h = 1 To 13
             outputArrYTD(outputRowYTD, h) = src(h)(i, 1)
         Next h
