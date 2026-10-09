@@ -348,7 +348,7 @@ anchor: one export left `STORE #` blank and put `Grand Total` in `BILL CODE`; a 
 `Grand Total` directly in `STORE #` and leaves `BILL CODE` blank instead. There is no column
 that is reliably blank on every vendor's summary row, so this judges the row's *shape* instead.
 
-`RowValuesLookLikeSummary(rowValues, maxAmountInBlock)` is the pure, testable core: three
+`RowValuesLookLikeSummary(rowValues, maxAmountInBlock[, moneyCols])` is the pure, testable core: three
 independently weak signals — a cell whose whole trimmed text is a label like `Total` or
 `Grand Total` (an exact match, not a substring, so a `TRANSACTION DETAILS` note that happens to
 contain "totaled" doesn't trip it); the row is mostly blank; the row holds a dollar amount at
@@ -358,8 +358,16 @@ signals together call it a summary row; one alone does not, so a real row is nev
 just for being sparse, or for happening to hold this batch's single largest amount, or for a
 free-text field containing "total" somewhere.
 
-`LastRealDataRow(ws, rawLastRow, headerRow, firstCol, lastCol)` (worksheet) and
-`LastRealDataRowInArray(sourceData, rawLastRow, headerRow, firstCol, lastCol)` (an already-loaded
+**Pass `moneyCols`.** The optional array of dollar-column numbers (`SUBTOTAL`, `SALES TAX`,
+`TOTAL`) restricts the amount signal to those columns. Without it every column feeds the signal,
+and a text invoice # like `"0906964326"` or a date serial like `46240` coerces to a "money" value
+far larger than any footer total — so a footer with no label and nothing but its three amounts
+(blank everywhere else) is never "the largest amount", ends up with only the sparse signal, and is
+kept as a data row (the 2026-10-08 `STORE #` blank-cell rejection). Omitting it keeps the old
+all-column scan; new callers should always pass it.
+
+`LastRealDataRow(ws, rawLastRow, headerRow, firstCol, lastCol[, moneyCols])` (worksheet) and
+`LastRealDataRowInArray(sourceData, rawLastRow, headerRow, firstCol, lastCol[, moneyCols])` (an already-loaded
 2D array, e.g. from `LoadCoupaSourceData`) both walk upward from a caller's own coarse starting
 guess, skipping a trailing blank row or one that looks like a summary row, and return the first
 row that is neither. Both variants' `AddNewBills` use these instead of anchoring on a specific
