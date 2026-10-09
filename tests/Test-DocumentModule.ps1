@@ -30,7 +30,8 @@ $fiscalPath  = Join-Path $repo 'FiscalCalendar.vb'
 # -DocumentModule injects into ThisWorkbook instead of adding a standard module -- see
 # VbaHarness.psm1's New-VbaHost for why that switch exists. Everything else (path validation,
 # COM lifecycle, cleanup) is shared with Test-FiscalCalendar.ps1's use of the same function.
-$vba = New-VbaHost -SourceFiles @($fiscalPath) -DocumentModule
+$accrualPath = Join-Path $repo 'AccrualCutoff.vb'
+$vba = New-VbaHost -SourceFiles @($fiscalPath, $accrualPath) -DocumentModule
 
 try {
     # Called as a COM method on the workbook object -- e.g. $vba.Workbook.FiscalYearWeeks(2026)
@@ -89,6 +90,19 @@ try {
 
     Assert-Equal -Expected '2026-09-27' -Actual ($wb.FiscalWeekStartOf([datetime]'2026-10-01')) `
                  -Because 'ThisWorkbook.FiscalWeekStartOf(2026-10-01)'
+
+    # AccrualCutoff.vb, injected alongside: the fiscal-month arithmetic the accruals picker uses.
+    Assert-Equal -Expected '2026-10-03' -Actual ($wb.AccrualMonthEnd(2026, 8)) `
+                 -Because 'ThisWorkbook.AccrualMonthEnd(2026, 8)'
+
+    Assert-Equal -Expected '2026-10-03' -Actual ($wb.AccrualLastClosedDay([datetime]'2026-10-09')) `
+                 -Because 'ThisWorkbook.AccrualLastClosedDay(2026-10-09)'
+
+    Assert-Equal -Expected 8 -Actual ($wb.AccrualMonthFromAnswer('September', 8)) `
+                 -Because 'ThisWorkbook.AccrualMonthFromAnswer("September", 8)'
+
+    Assert-Equal -Expected 'January' -Actual ($wb.AccrualFiscalMonthName(12)) `
+                 -Because 'ThisWorkbook.AccrualFiscalMonthName(12)'
 } finally {
     Remove-VbaHost -VbaHost $vba | Out-Null
 }
