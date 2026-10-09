@@ -10,7 +10,12 @@ Run them:
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File tests\Test-FiscalCalendar.ps1
 powershell -NoProfile -ExecutionPolicy Bypass -File tests\Test-DocumentModule.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File tests\Test-AccrualCutoff.ps1
 ```
+
+`Test-AccrualCutoff.ps1` covers only the pure fiscal-month arithmetic in `AccrualCutoff.vb`. The report
+and its picker need a worksheet, a tenant config and a dialog, so they are checked by hand, or by a
+throwaway scratch workbook that shadows `MsgBox` -- not by a committed suite.
 
 Each script exits 0 on all-pass, 1 on any failure, so they are CI-usable as-is.
 
