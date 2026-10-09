@@ -290,8 +290,9 @@ time:
 A tenant that opts in must also declare these `TenantColLetter` concepts: `store-number`,
 `business-unit`, `invoice-type`, `submitted-invoice-number`, `total`, `requisition-number`,
 `requisition-status`, `purchase-order-number`, `order-date`, `purchase-order-status`,
-`invoice-status`, `invoice-approval-date`, `notes`. A missing one is reported by the report's own
-error handler, which also restores calculation and screen updating.
+`invoice-status`, `invoice-approval-date`, `notes`, and `request-date`, which is filtered on but not
+reported: a row requested after the cut-off date's day is left off both sheets. A missing one is
+reported by the report's own error handler, which also restores calculation and screen updating.
 
 **The cut-off is a fiscal month, not a typed date.** The user picks from the fiscal months that have
 already closed; the cut-off is that month's last day (a Saturday), shown for confirmation before the
