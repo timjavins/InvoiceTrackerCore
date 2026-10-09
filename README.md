@@ -266,6 +266,46 @@ forbids things a standard module allows, and this module could otherwise pass ev
 assertion and still fail to compile in production. See `tests/README.md` for why there are two
 scripts and what each one does and does not prove.
 
+## The accruals report
+
+`GenerateAccrualsReport.vb` builds the finance accruals workbook (a 13-week `T - 3 mos.` sheet and a
+`YTD` sheet, saved to Downloads) from the tracker sheet. It was Securitas's own module until it moved
+here; the selection rules and column letters are now tenant config, so another tracker can adopt it
+without forking the module.
+
+**It is dormant unless the tenant opts in.** `TenantAccrualsEnabled()` must return `True`; otherwise
+running it shows a notice and does nothing. A tracker that has not agreed accrual criteria with
+finance should not get a report built on someone else's.
+
+**Every tenant that stacks core must declare** (ADR-0003), because core calls them by name at compile
+time:
+
+| Declaration | Purpose |
+|---|---|
+| `TenantAccrualsEnabled()` | `True` to switch the report on |
+| `TenantAccrualBusinessUnits()` | business units that accrue (an array of text) |
+| `TenantAccrualExcludedInvoiceTypes()` | `INVOICE TYPE` values that never accrue, matched case-insensitively |
+| `PickCutoffMonth(...)` | variant-owned shim for the clickable month picker; a stub returning `False` is valid |
+
+A tenant that opts in must also declare these `TenantColLetter` concepts: `store-number`,
+`business-unit`, `invoice-type`, `submitted-invoice-number`, `total`, `requisition-number`,
+`requisition-status`, `purchase-order-number`, `order-date`, `purchase-order-status`,
+`invoice-status`, `invoice-approval-date`, `notes`. A missing one is reported by the report's own
+error handler, which also restores calculation and screen updating.
+
+**The cut-off is a fiscal month, not a typed date.** The user picks from the fiscal months that have
+already closed; the cut-off is that month's last day (a Saturday), shown for confirmation before the
+run. The month list comes from `FiscalCalendar.vb`: it covers the fiscal year of the last closed
+month, so in the first weeks of a fiscal year it is the previous year. The picker is two layers.
+`PickCutoffMonth` is the variant-owned hook that shows a clickable `UserForm` (a button per month,
+plus a box to type a month number or name); when it returns `False`, core asks with an `InputBox`
+that takes the same number or name. Either way the answer goes through the same validation
+(`AccrualMonthFromAnswer`), so the two routes cannot disagree.
+
+The month arithmetic lives apart in `AccrualCutoff.vb`, pure computation over `FiscalCalendar.vb`, so
+it is tested without a worksheet or tenant: `tests\Test-AccrualCutoff.ps1`. See `UserForm/README.md`
+for the form and its naming rule.
+
 ## Batch tracking
 
 `HashFile.vb`, `ProcessedBatchLog.vb` and `MoveProcessedFile.vb` let a tenant's `AddNewBills`
