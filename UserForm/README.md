@@ -24,6 +24,7 @@ just be a second version to drift out of step.
 
     TenantA-tracker/UserForm/ChromeDriver Error/TenantAWebDriverErrorForm.frm + .frx
     TenantA-tracker/UserForm/SheetPicker/TenantASheetPickerForm.frm + .frx
+    TenantA-tracker/UserForm/CutoffMonth/TenantACutoffMonthForm.frm + .frx
     TenantB-tracker/UserForm/ChromeDriver Error/TenantBWebDriverErrorForm.frm + .frx
     TenantB-tracker/UserForm/SheetPicker/TenantBSheetPickerForm.frm + .frx
 
@@ -40,7 +41,7 @@ the same Excel instance, and their VBA projects share the default project name
 - `TenantASheetPickerForm` / `TenantBSheetPickerForm`
 
 Core never names a form class. It calls a variant-owned shim — `ShowWebDriverError`,
-`PickSheetName` — which does the instantiation, so name resolution stays in the repo whose
+`PickSheetName`, `PickCutoffMonth` — which does the instantiation, so name resolution stays in the repo whose
 workbook actually holds the form.
 
 ### A shim cannot fall back when its form is missing
@@ -56,6 +57,11 @@ mention the class at all; its shim returns empty and lets core take the fallback
 |---|---|
 | `<Tenant>WebDriverErrorForm` | Shown when the Selenium WebDriver fails to start, usually a ChromeDriver version mismatch. Offers the SeleniumBasic directory and the driver download URL. |
 | `<Tenant>SheetPickerForm` | Lets the user pick a sheet when an imported workbook has no sheet matching the expected name. |
+| `<Tenant>CutoffMonthForm` | Lets the user click the fiscal month that is the accruals report's cut-off (months not yet closed are disabled), or type a month number or name. Returns the answer as text; core validates it. Only TenantA has one; its `PickCutoffMonth` shim shows it and the other trackers' shims return `False`, so core prompts instead. |
+
+`PickCutoffMonth(fiscalYear, lastClosedMonth, monthNames, ByRef answer) As Boolean` differs from
+`PickSheetName` in one way: it returns whether the form was **shown**, with the answer separate, so a
+user who cancels (`answer = ""`) is not mistaken for a tracker with no form and asked again by a prompt.
 
 ## Manual steps — done (2026-07-31)
 
