@@ -12,10 +12,14 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 $repo = Split-Path $PSScriptRoot -Parent
+# Folder name of the sibling tracker repo. Override in tests\local.config.ps1 (gitignored).
+$TenantADir = 'TenantA-tracker'
+$localConfig = Join-Path $PSScriptRoot 'local.config.ps1'
+if (Test-Path -LiteralPath $localConfig) { . $localConfig }
 Import-Module (Join-Path $PSScriptRoot 'VbaHarness.psm1') -Force
 Reset-AssertCounters
 
-$addNewBillsPath = Join-Path (Split-Path $repo -Parent) 'TenantA-tracker\file ingesting\AddNewBills.vb'
+$addNewBillsPath = Join-Path (Split-Path $repo -Parent) (Join-Path $TenantADir 'file ingesting\AddNewBills.vb')
 $fullSource = Get-Content -LiteralPath $addNewBillsPath -Raw
 
 $match = [regex]::Match($fullSource, '(?ms)^Sub PopulateInvoiceTypeForNewRows.*?^End Sub')

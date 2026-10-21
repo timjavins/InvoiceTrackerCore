@@ -13,3 +13,4 @@ notes/
 docs/superpowers/
 .superpowers/
 .sanitize/
+tests/local.config.ps1

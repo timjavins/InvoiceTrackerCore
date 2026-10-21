@@ -124,3 +124,14 @@ There are two scripts here for a reason, not by accident:
 Neither script substitutes for the other. `Test-FiscalCalendar.ps1` proves the logic is correct;
 `Test-DocumentModule.ps1` proves that same code still compiles and returns correct values once it
 is a document-module member, which is the only place the class-module restrictions apply.
+
+## Local configuration
+
+`Test-ProcessNewBillsBulk.ps1` and `Test-PopulateInvoiceTypeForNewRows.ps1` read source from a
+sibling tracker repo, assumed to sit beside this one in a folder named `TenantA-tracker`. If your
+checkout uses a different folder name, create `tests\local.config.ps1` (gitignored) containing, for
+example:
+
+```powershell
+$TenantADir = 'my-tracker-folder'
+```

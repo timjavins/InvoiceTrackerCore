@@ -10,11 +10,15 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 $repo = Split-Path $PSScriptRoot -Parent
+# Folder name of the sibling tracker repo. Override in tests\local.config.ps1 (gitignored).
+$TenantADir = 'TenantA-tracker'
+$localConfig = Join-Path $PSScriptRoot 'local.config.ps1'
+if (Test-Path -LiteralPath $localConfig) { . $localConfig }
 Import-Module (Join-Path $PSScriptRoot 'VbaHarness.psm1') -Force
 Reset-AssertCounters
 
 # ProcessNewBills.vb lives in the TenantA-tracker repo, a sibling of InvoiceTrackerCore.
-$pnbPath = Join-Path (Split-Path $repo -Parent) 'TenantA-tracker\file ingesting\ProcessNewBills.vb'
+$pnbPath = Join-Path (Split-Path $repo -Parent) (Join-Path $TenantADir 'file ingesting\ProcessNewBills.vb')
 $sources = @(
     (Join-Path $repo 'CoerceValues.vb'),
     (Join-Path $repo 'ConvertStoreNumbers.vb'),
