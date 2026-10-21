@@ -1,8 +1,7 @@
 ' SHA-256 of a file's bytes, as 64 lowercase hex characters, or "" if it cannot be computed.
 '
 ' Identifies a bill file by content rather than by name: a vendor re-sending the same file
-' under a new name, or someone copying it back into the inbox, still hashes the same. See the
-' batch-tracking spec, section 1.
+' under a new name, or someone copying it back into the inbox, still hashes the same.
 '
 ' Shells to certutil, which ships with Windows, rather than calling CryptoAPI: that needs
 ' Declare, which a class module (ThisWorkbook, where the stack lives) forbids as a public

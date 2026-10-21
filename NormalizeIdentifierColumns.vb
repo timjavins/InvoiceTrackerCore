@@ -1,6 +1,5 @@
 ' Normalizes the tracker's identifier columns -- REQ #, invoice numbers, payment # -- to text,
-' the same way ConvertStoreNumbers.vb normalizes STORE #. See
-' notes/identifier-types-investigation.md.
+' the same way ConvertStoreNumbers.vb normalizes STORE #.
 '
 ' Why this exists: every Coupa-side sheet (Coupa Reqs, Coupa Invs, Coupa POs) stores its key
 ' column as text -- confirmed on both live workbooks. XLOOKUP/VLOOKUP/Match never coerce a
@@ -82,7 +81,7 @@ Public Function NormalizeIdentifierColumnsOn(ByVal ws As Worksheet, ByVal cols A
     ' Reads are filter-safe (LastNonEmptyRow above, and the bulk .Value/.Formula reads in
     ' NicSweepColumn, both read every physical row regardless of visibility). Writes are not:
     ' assigning a multi-row array to a Range while FilterMode is True does not reliably map
-    ' array rows to sheet rows -- confirmed directly (see notes/normalize-bulk-report.md) --
+    ' array rows to sheet rows -- confirmed directly --
     ' hidden rows silently keep their old value while visible rows can receive the WRONG
     ' element instead of their own. So whenever the sheet has an active filter, every write
     ' below goes one row at a time instead of in a bulk range, which is exactly what this
@@ -234,8 +233,8 @@ End Function
 ' and every *visible* row in that same write can receive the wrong array element instead of its
 ' own (observed: every visible row received the array's first element). A single-cell write has
 ' no such ambiguity, and this is exactly what NormalizeIdentifierColumnsOn did before this
-' rewrite, so it is already proven correct under a filter -- see
-' notes/normalize-bulk-report.md for the reproduction. rowIsFormula, rowNeedsWrite, and
+' rewrite, so it is already proven correct under a filter.
+' rowIsFormula, rowNeedsWrite, and
 ' targetValues are 1-based over rowCount rows, where array row i is sheet row i + 1.
 Private Sub NicWritePerCell(ByVal ws As Worksheet, ByVal colLetter As String, _
                             ByRef rowIsFormula() As Boolean, ByRef rowNeedsWrite() As Boolean, _

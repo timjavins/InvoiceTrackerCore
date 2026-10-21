@@ -202,8 +202,7 @@ amounts and dates are numbers.
 tracker sheet, the same way `ConvertStoreNumbers.vb` zero-pads STORE #. Every Coupa-side sheet
 (`Coupa Reqs`, `Coupa Invs`, `Coupa POs`) stores its key column as text; XLOOKUP/VLOOKUP/Match
 never coerce a numeric key to match a text value, so a tracker identifier cell that lands as a
-Number silently breaks every formula keyed on it. See
-`notes/identifier-types-investigation.md` for the live-workbook evidence and root cause.
+Number silently breaks every formula keyed on it.
 
 `NormalizeIdentifierColumnsOn(ws, cols)` sweeps a sheet/column list with a bulk read/compute/
 write per column, the same shape `ConvertStoreNumbers.vb` uses: one read of `.Value` and one
@@ -311,8 +310,7 @@ for the form and its naming rule.
 
 `HashFile.vb`, `ProcessedBatchLog.vb` and `MoveProcessedFile.vb` let a tenant's `AddNewBills`
 refuse a bill file it has already processed. The file is identified by SHA-256 of its bytes
-(`certutil`), so a renamed or re-sent copy is still recognised. See
-`docs/superpowers/specs/2026-09-26-batch-workbook-tracking-design.md`, section 1.
+(`certutil`), so a renamed or re-sent copy is still recognised.
 
 `HashFile` returns `""` on any failure and never raises. Callers treat `""` as "stop before
 opening the file".
@@ -355,8 +353,7 @@ run repairs any partial write, because it always replaces the whole owned block 
 
 Owned rows are deleted and re-appended rather than the sheet being rewritten, because writing
 a legacy text value such as `0175` back into a General cell converts it to a number. The
-TenantA `SyncAllYears` wrapper supplies the SharePoint side; see the batch-tracking spec,
-section 3.
+TenantA `SyncAllYears` wrapper supplies the SharePoint side.
 
 **Filters.** A sheet with an active filter (`FilterMode = True`, meaning rows are currently
 hidden by filter criteria) is refused outright, before any delete -- neither sheet is read,

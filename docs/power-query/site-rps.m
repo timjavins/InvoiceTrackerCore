@@ -13,6 +13,12 @@
 //   BU List                        the store list, store name and BU (1079 unique stores)
 //   Staff Directory.xlsx  tier 1/2/3 contacts (439 stores)
 //
+// Site-specific values are NOT in this file. Define three text parameters in the workbook's
+// Power Query (Home > Manage Parameters) before pasting:
+//   DirSiteUrl    SharePoint site URL holding the staff directory
+//   DirFileName   file name of the staff directory workbook
+//   DirSheetName  sheet inside it that holds the contacts
+//
 // Emits the same 11 columns in the same order as before, so TenantSheetName("site-rps") and
 // the VBA cascade in RequesterEmail.vb need no change.
 let
@@ -42,15 +48,15 @@ let
 
     // ---- source B: the AP Staff Directory on the same SharePoint site ----------------
     SiteFiles = SharePoint.Files(
-        "https://example.sharepoint.com/sites/TeamSite",
+        DirSiteUrl,
         [ApiVersion = 15]
     ),
     DirBinary = Table.SelectRows(
         SiteFiles,
-        each [Name] = "Staff Directory.xlsx"
+        each [Name] = DirFileName
     ){0}[Content],
     // Read the SHEET rather than its table, so renaming the table cannot break this.
-    DirSheet = Excel.Workbook(DirBinary, null, true){[Item = "Contacts", Kind = "Sheet"]}[Data],
+    DirSheet = Excel.Workbook(DirBinary, null, true){[Item = DirSheetName, Kind = "Sheet"]}[Data],
     DirHeaders = Table.PromoteHeaders(DirSheet, [PromoteAllScalars = true]),
     DirCols = Table.SelectColumns(
         DirHeaders,

@@ -7,3 +7,9 @@ test-input/
 # Stacked artifacts are build output, not source.
 *MegaStack*.vb
 notes/sessions/
+
+# Local-only working material and sanitization config; never tracked.
+notes/
+docs/superpowers/
+.superpowers/
+.sanitize/

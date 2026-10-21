@@ -1,7 +1,7 @@
 ' Decides, before anything is written, which incoming bill rows to skip.
 '
 ' Two different tests, because TenantA monitoring bills put one bill code on several store
-' rows and repair/installation bills never do (see the batch-tracking spec, section 2):
+' rows and repair/installation bills never do:
 '   already-processed  the code is already in the tracker (the rows BEFORE this import)
 '   repeat-in-file     the code appears on more than one incoming row, and the caller said
 '                      repeats are not allowed for this bill type

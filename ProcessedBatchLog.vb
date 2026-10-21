@@ -3,8 +3,7 @@
 ' The log is a hidden sheet in the WORKING tracker workbook itself, not a file beside it:
 ' the tracker is what gets shared, copied and rolled over each year, and the log has to
 ' travel with it. The sheet is created on first write, so rolling this out needs no manual
-' migration step. Sheet name comes from TenantProcessedBatchSheet(). See the batch-tracking
-' spec, section 1.
+' migration step. Sheet name comes from TenantProcessedBatchSheet().
 '
 ' Row layout: HASH | SOURCE FILE | TENANT | PROCESSED AT | ROWS ADDED | ROWS SKIPPED
 

@@ -7,7 +7,7 @@
 ' partially written. Callers must not treat -1 as "dst is unchanged"; the next successful run
 ' repairs any such partial write, because it always replaces the whole owned block again.
 '
-' Built for the All-Years archive (batch-tracking spec, section 3): src is the working book's
+' Built for the All-Years archive: src is the working book's
 ' Invoices sheet, dst the archive's, which has the same columns plus a trailing "Source File"
 ' tag. Rows whose tag is in ownedTags belong to the mirror and are replaced wholesale on every
 ' run; every other row is history and is never touched.
