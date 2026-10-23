@@ -163,6 +163,28 @@ both tenants classify identically. It classifies from `TryResolveSiteRequester`'
 never from its `reason` prose — otherwise rewording a warning would silently change the
 classification.
 
+## The credit chart of accounts
+
+The Coupa instance keeps a separate chart of accounts for the credit entity, and a requisition line posts
+to the one its business unit belongs to. A supplier site belongs to one chart too (its name ends in the
+chart's name), and Coupa rejects a line whose supplier site and chart disagree. Core decides this in
+`FlatFileHelpers.vb`, from configuration -- it contains no business unit or chart name of its own
+(ADR-0006):
+
+- `IsCreditBusinessUnit(bu)` reads `TenantCreditBusinessUnit()`; `ChartOfAccountNameForBU(bu)` returns
+  `TenantChartOfAccountName(IsCreditBusinessUnit(bu))`.
+- `SupplierSiteMatchesChart(supplierName, chartName)`: false only when the site's name ends in the *other*
+  configured chart's name.
+- `LineIdentityProblem(bu, supplierName, supplierNumber)`: `""` when a line can be uploaded, else why not
+  -- the supplier has no credit supplier number (not every supplier does), or its site is for the other
+  chart. Call it once a row's BU and supplier are known, and skip the row with the reason.
+
+Every tenant declares `TenantCreditBusinessUnit` and both `TenantChartOfAccountName` values, even before
+it has billed a credit row: an empty BU never matches, so a tenant that leaves it empty posts everything
+to its normal chart. Supplier identity stays with the tenant (`TenantSupplierNumber(isCredit)` /
+`TenantSupplierName(isCredit)`), returning `0` and `""` for `isCredit = True` when the supplier has no
+credit identity. Tested by `tests\Test-FlatFileHelpers.ps1`.
+
 ## The requisition join key
 
 `LookupReqs.vb` backfills the tracker's requisition number once Coupa has assigned one, joining

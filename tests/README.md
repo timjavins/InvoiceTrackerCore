@@ -11,7 +11,12 @@ Run them:
 powershell -NoProfile -ExecutionPolicy Bypass -File tests\Test-FiscalCalendar.ps1
 powershell -NoProfile -ExecutionPolicy Bypass -File tests\Test-DocumentModule.ps1
 powershell -NoProfile -ExecutionPolicy Bypass -File tests\Test-AccrualCutoff.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File tests\Test-FlatFileHelpers.ps1
 ```
+
+`Test-FlatFileHelpers.ps1` compiles `FlatFileHelpers.vb` alone, over a made-up tenant config defined in the
+script, and covers the credit-chart decision: which business unit is credit, which chart of accounts a row
+posts to, and `LineIdentityProblem`.
 
 `Test-AccrualCutoff.ps1` covers only the pure fiscal-month arithmetic in `AccrualCutoff.vb`. The report
 and its picker need a worksheet, a tenant config and a dialog, so they are checked by hand, or by a
