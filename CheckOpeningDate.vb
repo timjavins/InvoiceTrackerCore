@@ -1,6 +1,7 @@
-' Flags invoices that may be covered by a new-store warranty: work billed within the
-' warranty window of a store's opening. Matching rows are highlighted, marked WARRANTY in
-' the requisition column when it is still blank, and annotated in notes.
+' Flags invoices billed within the warranty window of a store's opening. Matching rows are
+' highlighted, marked in the requisition column when it is still blank, and annotated in
+' notes. Repair work is marked WARRANTY; installation work is marked NSO (new store opening),
+' since an installation at a new store is part of the opening rather than a warranty claim.
 '
 ' Union of both variants. TenantA gated the check to repair work (a Service Order number
 ' in transaction details, or "REPAIR" in the invoice type) -- TenantB had no such gate and
@@ -10,7 +11,10 @@
 '
 ' Window length, sheet names, and columns all come from TenantConfig.
 
+Private Const WARRANTY_MARKER As String = "WARRANTY"
+Private Const NSO_MARKER As String = "NSO"
 Private Const WARRANTY_NOTE As String = "May be a warranty repair. The invoice date was "
+Private Const NSO_NOTE As String = "May be a new store opening (NSO) installation. The invoice date was "
 
 Public Sub CheckOpeningDate(Optional ByVal announce As Boolean = True, _
                             Optional ByVal manageProtection As Boolean = True)
@@ -69,7 +73,17 @@ Public Sub CheckOpeningDate(Optional ByVal announce As Boolean = True, _
     Dim flagged As Long
     Dim i As Long
     For i = 2 To lastRowInvoices
-        If IsRepairRow(wsInvoices, i) Then
+        Dim marker As String, note As String
+        marker = vbNullString
+        If IsInstallationRow(wsInvoices, i) Then
+            marker = NSO_MARKER
+            note = NSO_NOTE
+        ElseIf IsRepairRow(wsInvoices, i) Then
+            marker = WARRANTY_MARKER
+            note = WARRANTY_NOTE
+        End If
+
+        If Len(marker) > 0 Then
 
             If Not IsEmpty(wsInvoices.Cells(i, colStore).Value) And _
                Not IsEmpty(wsInvoices.Cells(i, colDate).Value) Then
@@ -101,11 +115,11 @@ Public Sub CheckOpeningDate(Optional ByVal announce As Boolean = True, _
                                          wsInvoices.Cells(i, colNotes)).Interior.Color = RGB(255, 192, 203)
 
                         If Len(CStr(wsInvoices.Cells(i, colReq).Value)) = 0 Then
-                            wsInvoices.Cells(i, colReq).Value = "WARRANTY"
+                            wsInvoices.Cells(i, colReq).Value = marker
                         End If
 
-                        If InStr(1, CStr(wsInvoices.Cells(i, colNotes).Value), WARRANTY_NOTE, vbTextCompare) = 0 Then
-                            wsInvoices.Cells(i, colNotes).Value = WARRANTY_NOTE & days & _
+                        If InStr(1, CStr(wsInvoices.Cells(i, colNotes).Value), note, vbTextCompare) = 0 Then
+                            wsInvoices.Cells(i, colNotes).Value = note & days & _
                                 " days from store opening. " & wsInvoices.Cells(i, colNotes).Value
                         End If
 
@@ -127,7 +141,7 @@ Public Sub CheckOpeningDate(Optional ByVal announce As Boolean = True, _
     End If
 
     If announce Then
-        MsgBox flagged & " row(s) highlighted for warranty review. Request dates were " & _
+        MsgBox flagged & " row(s) highlighted for warranty or NSO review. Request dates were " & _
                "compared against store opening dates.", vbInformation
     End If
 
@@ -143,6 +157,23 @@ ErrorHandler:
     If protectionOn Then ProtectSheet
     MsgBox "CheckOpeningDate failed: " & Err.Description, vbCritical
 End Sub
+
+' Whether a row is installation work, and so an NSO candidate rather than a warranty one.
+'
+' Needs the tenant's invoice-type column; a tenant without one cannot tell installations
+' apart and treats every row as repair (see IsRepairRow). Checked before IsRepairRow because
+' an installation bill can also carry a Service Order number.
+Private Function IsInstallationRow(ByVal ws As Worksheet, ByVal rowIndex As Long) As Boolean
+    Dim colType As String
+
+    On Error Resume Next
+    colType = TenantColLetter("invoice-type")
+    On Error GoTo 0
+
+    If Len(colType) = 0 Then Exit Function
+
+    IsInstallationRow = (InStr(1, CStr(ws.Cells(rowIndex, colType).Value), "INSTALLATION", vbTextCompare) > 0)
+End Function
 
 ' Whether a row represents repair work, and so is a warranty candidate.
 '
